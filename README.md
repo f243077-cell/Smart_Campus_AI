@@ -40,6 +40,12 @@ python -m streamlit run app.py
 This opens the browser at http://localhost:8501. The sidebar has the same 7 functions as the CLI menu. The CLI
 and the web UI share all AI modules, so you can use either one.
 
+The web UI uses the **Campus Line (Forest & Beige)** design: the five request types are five transit lines
+and the AI modules are the stations they stop at. A result shows the request travelling its line station by
+station (skipped stops are dashed, a failure ends at a red buffer stop), and the campus map, priority network,
+constraint graph and booking grid are drawn live from the real modules. Light and dark themes are both
+available (menu, top right -> Settings). All styling and drawing code is in `ui.py`.
+
 `python generate_report.py` rebuilds the Word/PDF report with screenshots and the full source code.
 
 ## Files
@@ -48,6 +54,7 @@ and the web UI share all AI modules, so you can use either one.
 |------------------------|----------------------------------------------------------------|
 | `main.py`              | CLI menu (entry point)                                         |
 | `app.py`               | Streamlit web UI (second entry point)                          |
+| `ui.py`                | Web UI design: theme tokens, CSS, HTML/SVG drawings            |
 | `config.py`            | Roles, request types, rooms, slots, encodings, paths           |
 | `preprocessing.py`     | 3.1 Input & Preprocessing                                      |
 | `router.py`            | 3.2 Request Router                                             |
