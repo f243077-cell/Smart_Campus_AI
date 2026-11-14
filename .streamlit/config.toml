@@ -1,16 +1,12 @@
 # Streamlit theme for the Smart Campus AI web UI ("Campus Line", forest & beige).
-# Both palettes are defined; users switch with the menu (top right) ->
-# Settings -> Light / Dark / Use system setting. ui.py carries the same
-# tokens for the custom HTML blocks.
+# Light theme only; ui.py carries the same colours for the custom HTML blocks.
 
 [theme]
+base = "light"
 font = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap"
 headingFont = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap"
 baseRadius = "12px"
 buttonRadius = "full"
-
-# Light: beige ground, forest green line, ochre-rose signal
-[theme.light]
 primaryColor = "#1F4D36"
 backgroundColor = "#F6F1E6"
 secondaryBackgroundColor = "#F2EBDC"
@@ -19,27 +15,11 @@ linkColor = "#1F4D36"
 borderColor = "#DED2BA"
 codeBackgroundColor = "#F2EBDC"
 
-[theme.light.sidebar]
+[theme.sidebar]
 backgroundColor = "#E3D6BA"
 secondaryBackgroundColor = "#FFFCF6"
 textColor = "#17251D"
 borderColor = "#DED2BA"
-
-# Dark: the same line on a night forest ground
-[theme.dark]
-primaryColor = "#86C79F"
-backgroundColor = "#101813"
-secondaryBackgroundColor = "#1F2B24"
-textColor = "#ECE6D8"
-linkColor = "#86C79F"
-borderColor = "#34433A"
-codeBackgroundColor = "#1F2B24"
-
-[theme.dark.sidebar]
-backgroundColor = "#151E18"
-secondaryBackgroundColor = "#18221C"
-textColor = "#ECE6D8"
-borderColor = "#34433A"
 
 [browser]
 gatherUsageStats = false

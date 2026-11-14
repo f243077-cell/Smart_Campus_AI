@@ -31,18 +31,6 @@ LIGHT_TOKENS = {
     # CSP constraint colours keep the meaning of the project's CSP diagram
     "c-ne": "#C0392B", "c-exam": "#7B3294", "c-sup": "#C25A00", "c-prec": "#1F4E9C",
 }
-# Dark: the same forest line on a night ground (lighter line colours keep 4.5:1 contrast).
-DARK_TOKENS = {
-    "bg": "#101813", "panel": "#18221C", "panel-2": "#1F2B24", "ink": "#ECE6D8", "ink-2": "#B9BCAF",
-    "ink-3": "#8C9489", "rule": "#34433A", "rule-2": "#27342C", "brand": "#86C79F", "brand-2": "#A2D6B5",
-    "brand-ink": "#0F1A13", "side-bg": "#151E18", "side-ink": "#ECE6D8", "side-ink-2": "#B9BCAF",
-    "accent": "#E58DB0", "ok": "#7BD3A0", "bad": "#F29580", "warn": "#E6C46A", "ok-bg": "#1D3727",
-    "bad-bg": "#3F221B", "warn-bg": "#3A321A", "l-nav": "#5BBCC5", "l-elig": "#86AAE8", "l-book": "#B9A0E6",
-    "l-urg": "#F29580", "l-full": "#86C79F", "s0": "#5BBCC5", "s1": "#86AAE8", "s2": "#B9A0E6", "s3": "#E58DB0",
-    "shadow": "0 1px 0 rgba(0,0,0,.25),0 12px 28px -18px rgba(0,0,0,.8)", "focus": "#E58DB0",
-    "c-ne": "#FF7B72", "c-exam": "#D2A8FF", "c-sup": "#FFA657", "c-prec": "#79C0FF",
-}
-
 # Request type -> line name and line colour variable
 LINES = {
     "Navigation_Only": {"label": "Navigation", "var": "var(--l-nav)"},
@@ -343,6 +331,41 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 .maplegend i.ex{border-color:var(--line);background:color-mix(in srgb,var(--line) 22%,var(--panel))}
 .maplegend i.cur{border-color:var(--accent)}
 .maplegend i.p{width:22px;height:6px;border-radius:3px;border:none;background:var(--line)}
+/* step-by-step search decisions */
+.dmap .tree{stroke:var(--brand);stroke-width:3.5;fill:none;stroke-linecap:round;opacity:.45}
+.dmap .look{stroke-width:7;fill:none;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw .4s cubic-bezier(.4,0,.2,1) forwards}
+.dmap .look.added,.dmap .look.improved,.dmap .look.goal{stroke:var(--l-nav)}
+.dmap .look.rejected{stroke:var(--bad);stroke-width:3;stroke-dasharray:6 6;stroke-dashoffset:0;animation:fadeIn .4s both}
+.dmap .mnode.closed{fill:color-mix(in srgb,var(--brand) 28%,var(--panel));stroke:var(--brand)}
+.dmap .mnode.front{stroke:var(--accent);stroke-dasharray:4 3}
+.dmap .mnode.now{fill:var(--accent);stroke:var(--ink);stroke-width:4}
+.dmap .fval{fill:var(--panel);stroke:var(--accent);stroke-width:1.5}
+.dmap .fvalt{fill:var(--accent);font-size:10.5px;font-weight:700}
+.dmap .fval.next{fill:var(--accent)}.dmap .fvalt.next{fill:#fff}
+.dmap .endbadge{fill:var(--ink)}.dmap .endbadget{fill:var(--panel);font-size:10px;font-weight:700}
+.dleg i.closed{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 28%,var(--panel))}
+.dleg i.front{border-color:var(--accent);border-style:dashed}
+.dleg i.now{border-color:var(--ink);background:var(--accent)}
+.dleg i.tree{width:22px;height:5px;border-radius:3px;border:none;background:var(--brand);opacity:.45}
+.dleg i.good{width:22px;height:6px;border-radius:3px;border:none;background:var(--l-nav)}
+.dleg i.bad{width:22px;height:0;border-radius:0;border:none;border-top:3px dashed var(--bad)}
+.dstep{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 28px;align-items:start}
+.dstep .full{grid-column:1 / -1}
+.dstep .num{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;text-transform:uppercase}
+.dstep .why{font-size:15px;font-weight:600;line-height:1.4}
+.dstep .formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:var(--panel-2);padding:8px 12px;border-radius:10px}
+.dstep .stale{font-size:12.5px;color:var(--ink-2);background:var(--warn-bg);padding:6px 10px;border-radius:8px}
+.dec{display:grid;grid-template-columns:minmax(0,1.2fr) auto minmax(0,2fr);gap:4px 10px;align-items:baseline;font-size:13px;padding:7px 10px;border-radius:10px;background:var(--panel-2);animation:rise .35s both}
+.dec b{font-weight:600}
+.dec .o{font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.dec.added .o,.dec.improved .o,.dec.goal .o{background:var(--ok-bg);color:var(--ok)}
+.dec.rejected .o{background:var(--bad-bg);color:var(--bad)}
+.dec .r{color:var(--ink-2);font-size:12.5px}
+.dec .vals{grid-column:1 / -1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink-2)}
+.queue{display:flex;flex-wrap:wrap;gap:6px}
+.qitem{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:999px;background:var(--panel-2);font-size:12.5px;border:1.5px solid transparent}
+.qitem i{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--ink-3);color:var(--panel);font-size:10.5px;font-style:normal;font-weight:700}
+.qitem.next{border-color:var(--accent)}.qitem.next i{background:var(--accent)}
 /* navigation */
 .algocard{display:flex;flex-direction:column;gap:10px;padding:18px;border-radius:14px;background:var(--panel);border:1.5px solid var(--rule-2);animation:rise .4s both;transition:transform .2s,box-shadow .2s}
 .algocard:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
@@ -443,17 +466,16 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 @keyframes stnOn{0%{transform:scale(.4);border-color:var(--rule)}100%{transform:scale(1.05)}}
 @keyframes stnFail{0%{transform:scale(.4)}40%{transform:translateX(-5px)}70%{transform:translateX(5px)}100%{transform:none}}
 @media (prefers-reduced-motion: reduce){.stApp *,.stApp *::before,.stApp *::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-@media (max-width: 720px){.top h1{font-size:25px}.keys{grid-template-columns:1fr}.trackin{margin:6px 40px 0}}
+@media (max-width: 720px){.dec{grid-template-columns:1fr auto}.dec .r{grid-column:1 / -1}.top h1{font-size:25px}.keys{grid-template-columns:1fr}.trackin{margin:6px 40px 0}}
 """
 
 
-def page_css(theme):
+def page_css():
     """
     Function: page_css
-    Purpose : The whole stylesheet with the design tokens of the theme.
+    Purpose : The whole stylesheet with the design tokens filled in.
     """
-    tokens = DARK_TOKENS if theme == "dark" else LIGHT_TOKENS
-    token_text = "".join(f"--{name}:{value};" for name, value in tokens.items())
+    token_text = "".join(f"--{name}:{value};" for name, value in LIGHT_TOKENS.items())
     return ('<link rel="preconnect" href="https://fonts.googleapis.com">'
             '<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" '
             'rel="stylesheet"><style>' + _CSS.replace("__TOKENS__", token_text) + "</style>")
@@ -1181,3 +1203,189 @@ def booking_grid(booking_table):
               '<span style="color:var(--brand)"><i></i><span style="color:var(--ink)">Booked by a request</span></span>'
               '<span style="color:var(--rule)"><i></i><span style="color:var(--ink)">Free</span></span></div>')
     return f'<div class="bgridbox"><div class="bgrid">{"".join(cells)}</div></div>{legend}'
+
+
+# -------------------------------------------------------------------
+# Step-by-step search decisions
+# -------------------------------------------------------------------
+OUTCOME_LABELS = {"added": "added", "improved": "updated", "goal": "goal", "rejected": "ignored"}
+
+
+def number(value):
+    """
+    Function: number
+    Purpose : Short display of a cost / heuristic value (6, 4.43).
+    """
+    return f"{value:.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else str(value)
+
+
+def live_frontier(step):
+    """
+    Function: live_frontier
+    Purpose : Frontier after a step without stale priority-queue entries
+              (a node that was already expanded, or an older, dearer copy
+              of a node that was later found more cheaply).
+    """
+    expanded = set(step["expanded"])
+    entries, seen = [], set()
+    for entry in step["frontier"]:
+        if entry["node"] in expanded or entry["node"] in seen:
+            continue
+        seen.add(entry["node"])
+        entries.append(entry)
+    return entries
+
+
+def why_chosen(step, previous_step):
+    """
+    Function: why_chosen
+    Purpose : Sentence and formula explaining why the algorithm expanded
+              this node now.
+    """
+    node = nice(step["node"])
+    if previous_step is None:
+        return f"Start at {node}.", ""
+    if step["algorithm"] == "BFS":
+        return (f"Take {node} from the front of the queue: BFS is first in, first out, "
+                "so the closest stops (fewest edges) are always explored first."), ""
+    if step["algorithm"] == "UCS":
+        return (f"Pop {node} from the priority queue: it has the lowest path cost g so far.",
+                f"g({step['node']}) = {number(step['g'])}")
+    return (f"Pop {node} from the priority queue: it has the lowest f = g + h, "
+            "the best estimate of the whole trip through it.",
+            f"f({step['node']}) = g {number(step['g'])} + h {number(step['h'])} = {number(step['f'])}")
+
+
+def decision_map(campus_graph, step, start_node, goal_node):
+    """
+    Function: decision_map
+    Purpose : Campus graph at one search step, drawn separately from the
+              final route: expanded (closed) nodes numbered in order, the
+              node being expanded now, frontier nodes with their priority
+              (queue position for BFS, f or g for A*/UCS), the search tree
+              built so far, and every edge looked at in this step (green =
+              added or updated, red dashed = ignored).
+    """
+    points = {name: _map_xy(*xy) for name, xy in campus_graph.coordinates.items()}
+    edge_paths = {}
+    for node_a, node_b, cost in campus_graph.edges:
+        others = [point for name, point in points.items() if name not in (node_a, node_b)]
+        edge_paths[frozenset((node_a, node_b))] = (node_a, node_b, cost, others)
+
+    def edge_d(from_node, to_node):
+        """
+        Function: edge_d
+        Purpose : SVG path of the edge drawn from from_node to to_node.
+        """
+        node_a, node_b, _, others = edge_paths[frozenset((from_node, to_node))]
+        return _edge_path(points[from_node], points[to_node], others)[0]
+
+    base, weights = [], []
+    for node_a, node_b, cost, others in edge_paths.values():
+        path_text, middle = _edge_path(points[node_a], points[node_b], others)
+        base.append(f'<path class="medge" d="{path_text}"/>')
+        weights.append(f'<rect class="mwbg" x="{middle[0] - 9:.1f}" y="{middle[1] - 8:.1f}" width="18" height="15" rx="4"/>'
+                       f'<text class="mw" x="{middle[0]:.1f}" y="{middle[1] + 4:.1f}" text-anchor="middle">{cost}</text>')
+    tree = [f'<path class="tree" d="{edge_d(parent, child)}"/>'
+            for child, parent in step["parents"].items() if parent is not None]
+    looks = [f'<path class="look {decision["outcome"]}" pathLength="1" d="{edge_d(step["node"], decision["node"])}" '
+             f'style="animation-delay:{0.1 + index * 0.12:.2f}s"/>'
+             for index, decision in enumerate(step["neighbours"])]
+    frontier = live_frontier(step)
+    frontier_rank = {entry["node"]: (rank, entry) for rank, entry in enumerate(frontier)}
+    order_index = {name: index for index, name in enumerate(step["expanded"])}
+    nodes, labels = [], []
+    for name, (x_value, y_value) in points.items():
+        css_class = "mnode"
+        if name == step["node"]:
+            css_class += " now"
+        elif name in order_index:
+            css_class += " closed"
+        elif name in frontier_rank:
+            css_class += " front"
+        radius = 12 if name in (start_node, goal_node) else 9
+        nodes.append(f'<circle class="{css_class}" cx="{x_value:.1f}" cy="{y_value:.1f}" r="{radius}"><title>{nice(name)}</title></circle>')
+        if name == step["node"]:
+            nodes.append(f'<circle class="ring" cx="{x_value:.1f}" cy="{y_value:.1f}" r="{radius}"/>')
+        if name in order_index:
+            nodes.append(f'<circle class="mord" cx="{x_value + 13:.1f}" cy="{y_value - 13:.1f}" r="9"/>'
+                         f'<text class="mordt" x="{x_value + 13:.1f}" y="{y_value - 9.5:.1f}" text-anchor="middle">'
+                         f'{order_index[name] + 1}</text>')
+        elif name in frontier_rank:
+            rank, entry = frontier_rank[name]
+            text = (f"#{rank + 1}" if step["algorithm"] == "BFS"
+                    else f"{'f' if step['algorithm'] == 'A*' else 'g'} {number(entry['f'])}")
+            box_width = 8 + 6.2 * len(text)
+            next_class = " next" if rank == 0 else ""
+            nodes.append(f'<rect class="fval{next_class}" x="{x_value + 13:.1f}" y="{y_value - 8:.1f}" width="{box_width:.1f}" '
+                         f'height="16" rx="8"/><text class="fvalt{next_class}" x="{x_value + 13 + box_width / 2:.1f}" '
+                         f'y="{y_value + 3.5:.1f}" text-anchor="middle">{esc(text)}</text>')
+        for badge_node, badge_text in ((start_node, "S"), (goal_node, "G")):
+            if name == badge_node:
+                nodes.append(f'<circle class="endbadge" cx="{x_value - 15:.1f}" cy="{y_value - 14:.1f}" r="8"/>'
+                             f'<text class="endbadget" x="{x_value - 15:.1f}" y="{y_value - 10.5:.1f}" '
+                             f'text-anchor="middle">{badge_text}</text>')
+        offset_x, offset_y, anchor = MAP_LABELS.get(name, (0, -18 if y_value < 90 else 26, "middle"))
+        labels.append(f'<text class="mlabel" x="{x_value + offset_x:.1f}" y="{y_value + offset_y:.1f}" '
+                      f'text-anchor="{anchor}">{nice(name)}</text>')
+    legend = ('<div class="maplegend dleg"><span><i class="now"></i>Expanding now</span>'
+              '<span><i class="closed"></i>Already expanded (numbered)</span>'
+              '<span><i class="front"></i>Waiting in the frontier, with its priority</span>'
+              '<span><i class="good"></i>Edge looked at: added / updated</span>'
+              '<span><i class="bad"></i>Edge looked at: ignored</span>'
+              '<span><i class="tree"></i>Search tree so far</span>'
+              '<span style="font-weight:700">S / G</span><span>start / goal</span></div>')
+    return (f'<svg class="map dmap" viewBox="0 0 {MAP_W} {MAP_H}" role="img" '
+            f'aria-label="Search step: expanding {esc(step["node"])}">'
+            f'{"".join(base)}{"".join(tree)}{"".join(looks)}{"".join(weights)}{"".join(nodes)}{"".join(labels)}</svg>'
+            + legend)
+
+
+def decision_panel(step, previous_step, skipped_stale, step_number, step_total):
+    """
+    Function: decision_panel
+    Purpose : Text side of one search step: why this node was chosen, what
+              was decided for each neighbour (with g, h, f for UCS / A*),
+              and the frontier left for the next step.
+    """
+    sentence, formula = why_chosen(step, previous_step)
+    parts = [f'<span class="num">Step {step_number} of {step_total} · {esc(step["algorithm"])}</span>'
+             f'<p class="why">{esc(sentence)}</p>'
+             + (f'<div class="formula" style="margin-top:8px">{esc(formula)}</div>' if formula else "")]
+    for stale in skipped_stale:
+        parts.append(f'<div class="stale">First popped an old queue entry for {nice(stale["node"])} '
+                     f'(g {number(stale["g"])}); it was already expanded more cheaply, so it was skipped.</div>')
+    if step["goal_reached"] and step["algorithm"] != "BFS":
+        parts.append(f'<p class="okmsg">{nice(step["node"])} is the goal and it was popped with the lowest '
+                     f'{"f" if step["algorithm"] == "A*" else "g"}, so no cheaper route can exist. Search stops.</p>')
+    if step["neighbours"]:
+        rows = []
+        for index, decision in enumerate(step["neighbours"]):
+            values = ""
+            if "g" in decision:
+                values = (f'<span class="vals">g = {number(step["g"])} + {number(decision["edge"])} = {number(decision["g"])}'
+                          + (f' · h = {number(decision["h"])} · f = {number(decision["f"])}' if step["algorithm"] == "A*" else "")
+                          + "</span>")
+            rows.append(f'<div class="dec {decision["outcome"]}" style="animation-delay:{index * 0.08:.2f}s">'
+                        f'<b>{nice(decision["node"])}</b><span class="o">{OUTCOME_LABELS[decision["outcome"]]}</span>'
+                        f'<span class="r">{esc(decision["reason"])}</span>{values}</div>')
+        parts.append(f'<div class="col" style="gap:6px"><h3>Neighbours of {nice(step["node"])}</h3>{"".join(rows)}</div>')
+    if step["goal_reached"] and step["algorithm"] == "BFS":
+        parts.append('<p class="okmsg">The goal was generated as a neighbour, so BFS stops: '
+                     'no route with fewer stops can exist.</p>')
+    if not step["goal_reached"]:
+        frontier = live_frontier(step)
+        title = "Queue (first in, first out)" if step["algorithm"] == "BFS" else "Priority queue (lowest first)"
+        items = []
+        for rank, entry in enumerate(frontier):
+            value = "" if step["algorithm"] == "BFS" else f" · {'f' if step['algorithm'] == 'A*' else 'g'} {number(entry['f'])}"
+            items.append(f'<span class="qitem{" next" if rank == 0 else ""}"><i>{rank + 1}</i>{nice(entry["node"])}{esc(value)}</span>')
+        parts.append(f'<div class="col" style="gap:6px"><h3>{title}</h3><div class="queue">{"".join(items)}</div>'
+                     + (f'<p class="small muted">Next: {nice(frontier[0]["node"])}.</p>' if frontier else "") + "</div>")
+    header, details = parts[0], parts[1:]
+    left = [part for part in details if 'class="qitem' not in part and "Priority queue" not in part
+            and "Queue (first" not in part]
+    right = [part for part in details if part not in left]
+    return (f'<div class="dstep"><div class="full">{header}</div>'
+            f'<div class="col" style="gap:10px">{"".join(left)}</div>'
+            f'<div class="col" style="gap:10px">{"".join(right)}</div></div>')

@@ -24,12 +24,13 @@ import streamlit as st
 import config
 import preprocessing
 import ui
+import visualizer
 from csp_scheduler import EXAM_CONSTRAINT_EDGES, EXAM_GROUPS, EXAM_PRECEDENCE, solve_exam_schedule
 from knowledge_base import KnowledgeBaseError, format_atom, parse_atom
 from main import DEMO_REQUESTS
 from response_layer import log_response
 from router import PIPELINES, SmartCampusSystem
-from search_navigation import NavigationError, compare_algorithms
+from search_navigation import NavigationError, compare_algorithms, trace_search
 
 POSITIVE_STATUSES = ("COMPLETED", "APPROVED", "DISPATCHED")
 STOPPING_STATUSES = ("REJECTED", "UNSCHEDULABLE", "ERROR")
@@ -54,24 +55,12 @@ PAGE_INTROS = {
                                        "They predict priority only, never permission."),
     "Knowledge base": ("Knowledge base", "First-order facts and rules. Ask a goal and the system chains backward "
                                          "to known facts, or browse what forward chaining derives."),
-    "Navigation": ("Campus navigation", "The same trip searched three ways. Compare BFS, UCS and A*, then step through "
-                                        "the order each one explores the campus."),
+    "Navigation": ("Campus navigation", "The same trip searched three ways. Compare the final routes of BFS, UCS and A*, "
+                                        "then step through every decision each one makes on a separate graph."),
     "CSP schedule": ("Scheduling", "The exam timetable solved as a constraint problem with AC-3, MRV, LCV and "
                                    "forward checking, plus every room booking so far."),
     "History": ("Session history", "Every request made in this browser session. Open any of them again."),
 }
-
-
-def theme_name():
-    """
-    Function: theme_name
-    Purpose : 'dark' or 'light', from the theme the user picked in
-              Streamlit's settings menu (light if unknown).
-    """
-    try:
-        return "dark" if st.context.theme.type == "dark" else "light"
-    except AttributeError:
-        return "light"
 
 
 def show(html_text):
@@ -94,6 +83,42 @@ def render_html(target, html_text):
         target.markdown(block, unsafe_allow_html=True)
     else:
         target.html(block)
+
+
+def saved_chart(cache_key, make_chart):
+    """
+    Function: saved_chart
+    Purpose : Save a matplotlib chart to outputs/plots once per cache_key
+              (charts are slow to draw, Streamlit reruns on every click).
+    Returns : path of the PNG file
+    """
+    charts = st.session_state.setdefault("saved_charts", {})
+    path = charts.get(cache_key)
+    if path is None or not os.path.exists(path):
+        path = make_chart()
+        charts[cache_key] = path
+    return path
+
+
+def chart_downloads(paths, key):
+    """
+    Function: chart_downloads
+    Purpose : Download buttons for saved chart images, with a note saying
+              where they were written.
+    """
+    paths = [path for path in paths if path and os.path.exists(path)]
+    if not paths:
+        return
+    columns = st.columns(len(paths) + 1, vertical_alignment="center")
+    for index, path in enumerate(paths):
+        try:
+            with open(path, "rb") as chart_file:
+                columns[index].download_button(f"⤓  {os.path.basename(path)}", chart_file.read(),
+                                               os.path.basename(path), "image/png", key=f"{key}_{index}",
+                                               width="stretch")
+        except OSError as error:
+            columns[index].caption(f"Could not read {os.path.basename(path)}: {error}")
+    columns[-1].caption(f"Also saved in {os.path.relpath(config.PLOT_DIRECTORY)}")
 
 
 @st.cache_resource(show_spinner="Starting the five lines: campus graph, knowledge base, CSP and ANN...")
@@ -131,14 +156,67 @@ def history_label(index, response):
     return f"#{index + 1}  {response['request_id']}  {response['user_id']}  {response['status']}"
 
 
-def open_history_entry(label):
+def open_history_entry(index):
     """
     Function: open_history_entry
-    Purpose : Sidebar button callback - switch to the History page and
-              select the clicked response.
+    Purpose : Callback - switch to the History page and open the response
+              at this position of the session history.
     """
     st.session_state["page"] = "History"
-    st.session_state["history_select"] = label
+    st.session_state["history_open"] = index
+
+
+def selected_row(table_key):
+    """
+    Function: selected_row
+    Purpose : Index of the row the user clicked in a selectable table
+              (None if no row is selected).
+    """
+    selection = st.session_state.get(table_key)
+    try:
+        rows = selection.selection.rows
+    except AttributeError:
+        return None
+    return rows[0] if rows else None
+
+
+def on_history_row():
+    """
+    Function: on_history_row
+    Purpose : Callback - a row of the History table was clicked.
+    """
+    index = selected_row("history_table")
+    if index is not None:
+        st.session_state["history_open"] = index
+
+
+def find_in_history(request_id):
+    """
+    Function: find_in_history
+    Purpose : Position of the newest session response with this request id
+              (None if it was not made in this browser session).
+    """
+    history = st.session_state.get("history", [])
+    for index in range(len(history) - 1, -1, -1):
+        if history[index]["request_id"] == request_id and request_id != "-":
+            return index
+    return None
+
+
+def response_table(responses, key, on_click=None):
+    """
+    Function: response_table
+    Purpose : Selectable table of responses: clicking a row opens it.
+    """
+    frame = pd.DataFrame([{"Request": response["request_id"], "User": response["user_id"],
+                           "Line": ui.line_of(response["request_type"])["label"], "Status": response["status"],
+                           "Priority": response["priority"] or "-",
+                           "Assignment": response["assignment"] or "-",
+                           "Route": (response["route"] or "-").replace("_", " "),
+                           "Explanation": response["explanation"][-1]} for response in responses])
+    frame.index = range(1, len(frame) + 1)
+    st.dataframe(frame, key=key, on_select=on_click or "rerun", selection_mode="single-row",
+                 width="stretch", height=min(38 + 35 * len(frame), 420))
 
 
 def known_users(system):
@@ -224,6 +302,12 @@ def render_response(system, response):
     show(f'<div class="row" style="--line:{line["var"]}">'
          + ui.panel(ui.key_results(response), "Key results", css_class="grow")
          + ui.panel(route_body, "Route", route_meta, "grow3") + "</div>")
+    if response["route"] and search and len(search["path"]) > 1:
+        file_name = f"route_{response['request_id']}.png"
+        route_png = saved_chart(("route", response["request_id"], tuple(search["path"])),
+                                lambda: visualizer.plot_campus_graph(system.campus_graph, search["path"],
+                                                                     f"Route: {response['route']}", file_name))
+        chart_downloads([route_png], f"png_{response['request_id']}_{response['timestamp']}")
 
     show(f'<div style="--line:{line["var"]}"><div class="panel-head" style="margin:6px 0 0"><h2>At each stop</h2>'
          f'<span class="muted small">Only the modules that ran</span></div></div>')
@@ -236,6 +320,10 @@ def render_response(system, response):
         for tab, module in zip(tabs, ran):
             with tab:
                 show(f'<div style="--line:{line["var"]}">{module_detail(response, module)}</div>')
+                if module == "Search" and search and len(search["path"]) > 1:
+                    with st.expander("How the search decided, step by step", expanded=False):
+                        render_search_steps(system, search["path"][0], search["path"][-1], search["algorithm"],
+                                            key=f"result_{response['request_id']}_{response['timestamp']}")
 
     show(ui.explanation(response["explanation"]))
     if details.get("request"):
@@ -350,16 +438,47 @@ def page_home(system):
         show('<div class="row">'
              + ui.panel(ui.status_stack(status_counts.to_dict()), "By status", css_class="grow")
              + ui.panel(ui.hbars(type_items), "By request type", css_class="grow") + "</div>")
-        last = results_log.tail(10).iloc[::-1]
-        rows = []
-        for record in last.to_dict("records"):
-            colour = ui.line_of(record.get("request_type"))["var"]
-            rows.append(([ui.id_cell(record.get("request_id"), colour), ui.esc(record.get("user_id")),
-                          ui.esc(ui.line_of(record.get("request_type"))["label"]), ui.status_pill(record.get("status")),
-                          ui.priority_pill(record.get("priority") if isinstance(record.get("priority"), str) else None)],
-                         colour))
-        show(ui.panel(ui.table(["Request", "User", "Line", "Status", "Priority"], rows), "Last 10 requests",
-                      "From outputs/results_log.csv"))
+        show('<div class="panel-head" style="margin:6px 0 0"><h2>Last 10 requests</h2>'
+             '<span class="muted small">From outputs/results_log.csv · tick a row to open it</span></div>')
+        last = results_log.tail(10).iloc[::-1].reset_index(drop=True)
+        shown = last[["request_id", "user_id", "request_type", "status", "priority", "route"]].fillna("-").copy()
+        shown["request_type"] = shown["request_type"].map(lambda request_type: ui.line_of(request_type)["label"])
+        shown["route"] = shown["route"].str.replace("_", " ")
+        shown.columns = ["Request", "User", "Line", "Status", "Priority", "Route"]
+        st.session_state["home_last_ids"] = last["request_id"].tolist()
+        st.session_state["home_last_rows"] = last.fillna("-").to_dict("records")
+        st.dataframe(shown, key="home_table", on_select=on_home_row, selection_mode="single-row",
+                     hide_index=True, width="stretch")
+        picked = selected_row("home_table")
+        logged_row = None
+        if picked is not None and picked < len(st.session_state["home_last_rows"]):
+            logged_row = st.session_state["home_last_rows"][picked]
+            if find_in_history(logged_row["request_id"]) is not None:
+                logged_row = None                    # opened on the History page by on_home_row
+        if logged_row:
+            facts = "".join(f'<div class="kv" style="border-top-color:var(--rule)"><small>{ui.esc(name.replace("_", " ").capitalize())}</small>'
+                            f'<b style="font-size:15px">{ui.esc(value)}</b></div>'
+                            for name, value in logged_row.items())
+            show(ui.panel(f'<p class="small muted" style="margin-bottom:12px">This request was made in an earlier '
+                          'session, so only its log entry is kept (the full trace lives in that session).</p>'
+                          f'<div class="keys" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">{facts}</div>',
+                          f"Logged request {logged_row.get('request_id', '')}"))
+
+
+def on_home_row():
+    """
+    Function: on_home_row
+    Purpose : Callback - a row of the Home table was clicked. Requests from
+              this session open on the History page; older ones show their
+              log entry under the table (see page_home).
+    """
+    index = selected_row("home_table")
+    rows = st.session_state.get("home_last_rows", [])
+    if index is None or index >= len(rows):
+        return
+    history_index = find_in_history(rows[index]["request_id"])
+    if history_index is not None:
+        open_history_entry(history_index)
 
 
 def page_submit_request(system):
@@ -469,11 +588,12 @@ def page_batch_csv(system):
             show(f'<div class="alert" role="alert"><b>We could not read {ui.esc(name)}.</b>'
                  f'<p>{ui.esc(error)} Check the file and try again, or remove it to use the sample file.</p></div>')
             return
-        summary_rows = []
+        summary_rows, batch_responses = [], []
         progress_bar = st.progress(0.0, text="Each row rides its own line...")
         for row_number, (_, row) in enumerate(requests_frame.iterrows(), start=1):
             raw_request = {key: value for key, value in row.to_dict().items() if value != ""}
             response = process_and_store(system, raw_request)
+            batch_responses.append(response)
             summary_rows.append({"request_id": response["request_id"], "user": response["user_id"],
                                  "type": response["request_type"], "status": response["status"],
                                  "priority": response["priority"] or "-",
@@ -484,6 +604,7 @@ def page_batch_csv(system):
                                   text=f"Processing {row_number} of {len(requests_frame)}")
         progress_bar.empty()
         st.session_state["batch_summary"] = pd.DataFrame(summary_rows)
+        st.session_state["batch_responses"] = batch_responses
 
     summary = st.session_state.get("batch_summary")
     if summary is None:
@@ -491,16 +612,14 @@ def page_batch_csv(system):
                             ("var(--l-book)", "var(--l-urg)", "var(--l-nav)")))
         return
     show(ui.panel(ui.status_stack(summary["status"].value_counts().to_dict()), f"{len(summary)} requests processed"))
-    rows = []
-    for record in summary.to_dict("records"):
-        colour = ui.line_of(record["type"])["var"]
-        rows.append(([ui.id_cell(record["request_id"], colour), ui.esc(record["user"]),
-                      ui.esc(ui.line_of(record["type"])["label"]), ui.status_pill(record["status"]),
-                      ui.priority_pill(record["priority"]), ui.esc(record["assignment"]), ui.esc(record["route"]),
-                      f'<span class="small">{ui.esc(record["explanation"])}</span>'], colour))
-    show(ui.panel(ui.table(["Request", "User", "Line", "Status", "Priority", "Assignment", "Route", "Explanation"],
-                           rows, scroll=True), "Results"))
+    show('<div class="panel-head" style="margin:6px 0 0"><h2>Results</h2>'
+         '<span class="muted small">Tick a row (box on the left) to open its full result below</span></div>')
+    responses = st.session_state.get("batch_responses", [])
+    response_table(responses, "batch_table")
     st.download_button("Download results CSV", summary.to_csv(index=False), "batch_results.csv", "text/csv")
+    picked = selected_row("batch_table")
+    if picked is not None and picked < len(responses):
+        render_response(system, responses[picked])
 
 
 def page_ann_models(system):
@@ -550,6 +669,15 @@ def page_ann_models(system):
     if head_columns[1].button("Retrain models", type="primary", width="stretch"):
         with st.spinner("Training..."):
             st.session_state["ann_metrics"] = predictor.train(verbose=False)
+            trained = st.session_state["ann_metrics"]
+            st.session_state["ann_pngs"] = [
+                visualizer.plot_confusion_matrix(trained["perceptron_confusion"], ["Not urgent", "Urgent"],
+                                                 "Perceptron confusion matrix", "perceptron_confusion.png"),
+                visualizer.plot_confusion_matrix(trained["mlp_confusion"], config.PRIORITY_CLASSES,
+                                                 "MLP confusion matrix", "mlp_confusion.png"),
+                visualizer.plot_class_distribution(trained["class_distribution"]),
+                visualizer.plot_perceptron_errors(predictor.perceptron.errors_per_epoch),
+                visualizer.plot_mlp_history(predictor.mlp.history)]
     metrics = st.session_state.get("ann_metrics")
     if metrics:
         show('<div class="row">'
@@ -587,6 +715,8 @@ def page_ann_models(system):
              + ui.panel(ui.confusion(metrics["mlp_confusion"], config.PRIORITY_CLASSES), "MLP confusion (4×4)", css_class="grow2")
              + ui.panel(ui.hbars(dist_items, 70), "Class distribution", css_class="grow") + "</div>")
 
+    if st.session_state.get("ann_pngs"):
+        chart_downloads(st.session_state["ann_pngs"], "png_ann")
     if os.path.exists(config.ANN_DATASET_PATH):
         dataset = pd.read_csv(config.ANN_DATASET_PATH)
         with st.expander(f"Dataset · {len(dataset)} rows"):
@@ -695,38 +825,91 @@ def swap_route():
     st.session_state["nav_from"], st.session_state["nav_to"] = st.session_state["nav_to"], st.session_state["nav_from"]
 
 
-def walk_caption(result, step):
+def group_trace(trace):
     """
-    Function: walk_caption
-    Purpose : One sentence describing the current search step.
+    Function: group_trace
+    Purpose : Turn the raw search trace into one entry per expansion step.
+              A stale priority-queue pop (UCS / A*) is attached to the step
+              that follows it.
+    Returns : list of (step, previous_step, skipped_stale_entries)
     """
-    order = result["expanded_order"]
-    if step >= len(order):
-        return (f"{result['algorithm']} finished after {len(order)} expansions: "
-                f"{' → '.join(node.replace('_', ' ') for node in result['path'])} (cost {result['cost']}).")
-    return f"Step {step} of {len(order)}: {result['algorithm']} expands {order[step - 1].replace('_', ' ')}."
+    steps, pending_stale, previous_step = [], [], None
+    for entry in trace:
+        if entry["kind"] == "stale":
+            pending_stale.append(entry)
+            continue
+        steps.append((entry, previous_step, pending_stale))
+        previous_step, pending_stale = entry, []
+    return steps
 
 
-def walk_frame(system, result, step):
+def change_step(step_key, amount, step_count):
     """
-    Function: walk_frame
-    Purpose : HTML of one search walkthrough frame.
+    Function: change_step
+    Purpose : Previous / Next button callback for the step-by-step view.
     """
-    order = result["expanded_order"]
-    finished = step >= len(order)
-    current = None if finished else order[step - 1]
-    return (f'<p class="caption" aria-live="polite" style="margin:4px 0 10px">{ui.esc(walk_caption(result, step))}</p>'
-            + ui.campus_map(system.campus_graph, result["path"] if finished else None, order[:step], current,
-                            line="var(--accent)", label="Search walkthrough")
-            + ui.map_legend(walk=True, line="var(--accent)")
-            + f'<div style="margin-top:14px">{ui.order_chips(order[:step], current)}</div>')
+    current = st.session_state.get(step_key, 1)
+    st.session_state[step_key] = min(max(current + amount, 1), step_count)
+
+
+def decision_frame(system, steps, step_number, source, destination):
+    """
+    Function: decision_frame
+    Purpose : HTML of one step of the search: decision graph and the
+              explanation of the decision side by side.
+    """
+    step, previous_step, skipped_stale = steps[step_number - 1]
+    return ('<div class="col" style="gap:16px">'
+            + ui.panel(ui.decision_map(system.campus_graph, step, source, destination), "Decision graph",
+                       f"{step['algorithm']} · after step {step_number} of {len(steps)}")
+            + ui.panel(ui.decision_panel(step, previous_step, skipped_stale, step_number, len(steps)),
+                       "What was decided")
+            + "</div>")
+
+
+def render_search_steps(system, source, destination, algorithm_name, key):
+    """
+    Function: render_search_steps
+    Purpose : Step-by-step view of how one search algorithm decides,
+              separate from the final route map: Previous / Next / Play
+              controls, the decision graph, and the reasons for each step.
+    """
+    try:
+        _, trace = trace_search(source, destination, algorithm_name, system.campus_graph)
+    except NavigationError as error:
+        show(f'<div class="alert" role="alert"><b>The search could not be traced.</b><p>{ui.esc(error)}</p></div>')
+        return
+    steps = group_trace(trace)
+    if not steps:
+        show('<p class="muted">Start and goal are the same place, so the search makes no decisions.</p>')
+        return
+    step_key = f"{key}_step"
+    step_count = len(steps)
+    if not 1 <= st.session_state.get(step_key, 1) <= step_count:
+        st.session_state[step_key] = 1
+    control_columns = st.columns([1, 5, 1, 1], vertical_alignment="bottom")
+    control_columns[0].button("◀  Back", key=f"{key}_back", on_click=change_step, args=(step_key, -1, step_count),
+                              width="stretch", disabled=st.session_state.get(step_key, 1) <= 1)
+    if step_count > 1:
+        control_columns[1].slider("Step", 1, step_count, key=step_key)
+    control_columns[2].button("Next  ▶", key=f"{key}_next", on_click=change_step, args=(step_key, 1, step_count),
+                              width="stretch", disabled=st.session_state.get(step_key, 1) >= step_count)
+    play = control_columns[3].button("▶  Play all", key=f"{key}_play", width="stretch")
+    frame = st.empty()
+    if play:
+        for step_number in range(1, step_count + 1):
+            render_html(frame, decision_frame(system, steps, step_number, source, destination))
+            time.sleep(1.6)
+    else:
+        render_html(frame, decision_frame(system, steps, st.session_state.get(step_key, 1), source, destination))
 
 
 def page_navigation(system):
     """
     Function: page_navigation
-    Purpose : Compare BFS, UCS and A* on a route, and step through the
-              order in which each algorithm expands nodes.
+    Purpose : Compare BFS, UCS and A* on a route (final result), then
+              step through the decisions each algorithm makes on a
+              separate decision graph.
     """
     locations = system.campus_graph.nodes
     st.session_state.setdefault("nav_from", "Main_Gate")
@@ -756,24 +939,24 @@ def page_navigation(system):
          + ui.panel(ui.campus_map(system.campus_graph, best["path"], label="Best route") + ui.map_legend(),
                     "Best route", meta, "grow3")
          + ui.panel(side, "Side by side", css_class="grow") + "</div>")
+    file_suffix = f"{source}_{destination}"
+    route_png = saved_chart(("nav_route", source, destination),
+                            lambda: visualizer.plot_campus_graph(system.campus_graph, results[2]["path"],
+                                                                 f"A* route {source} -> {destination}",
+                                                                 f"campus_route_{file_suffix}.png"))
+    comparison_png = saved_chart(("nav_compare", source, destination),
+                                 lambda: visualizer.plot_algorithm_comparison(results,
+                                                                              f"search_comparison_{file_suffix}.png"))
+    chart_downloads([route_png, comparison_png], f"png_nav_{file_suffix}")
 
-    show('<div class="panel-head" style="margin:10px 0 0"><h2>Watch the search</h2>'
-         '<span class="muted small">Step through the order each algorithm explores the campus</span></div>')
-    control_columns = st.columns([2, 3, 1], vertical_alignment="bottom")
-    algorithm_name = control_columns[0].segmented_control("Algorithm", [result["algorithm"] for result in results],
-                                                          default=results[2]["algorithm"], key="walk_algo") \
+    show('<div class="panel-head" style="margin:14px 0 0"><h2>How the search decides, step by step</h2>'
+         '<span class="muted small">A separate graph from the final route above: each step shows which node is '
+         'expanded, why, and what happens to its neighbours</span></div>')
+    algorithm_name = st.segmented_control("Algorithm", [result["algorithm"] for result in results],
+                                          default=results[2]["algorithm"], key="steps_algo") \
         or results[2]["algorithm"]
-    result = next(item for item in results if item["algorithm"] == algorithm_name)
-    order = result["expanded_order"]
-    step = control_columns[1].slider("Step", 1, len(order), len(order)) if len(order) > 1 else 1
-    play = control_columns[2].button("▶  Play", width="stretch")
-    frame = st.empty()
-    if play:
-        for frame_step in range(1, len(order) + 1):
-            render_html(frame, ui.panel(walk_frame(system, result, frame_step)))
-            time.sleep(0.7)
-    else:
-        render_html(frame, ui.panel(walk_frame(system, result, step)))
+    render_search_steps(system, source, destination, algorithm_name,
+                        key=f"nav_{algorithm_name}_{source}_{destination}")
 
 
 def page_csp_schedule(system):
@@ -812,6 +995,9 @@ def page_csp_schedule(system):
         rows = [([ui.esc(booking["Slot"]), ui.nice(booking["Room"]), ui.esc(booking["Booked_By"])], "var(--brand)")
                 for booking in booking_table.to_dict("records")]
         show(ui.panel(ui.table(["Slot", "Room", "Booked by"], rows, scroll=True)))
+    schedule_png = saved_chart(("schedule", booking_table.to_csv(index=False)),
+                               lambda: visualizer.plot_schedule(booking_table))
+    chart_downloads([schedule_png], "png_schedule")
 
 
 def page_history(system):
@@ -826,18 +1012,13 @@ def page_history(system):
                             "Requests you submit, demos you run and batch rows all land here.", ("var(--rule)",)))
         st.button("Submit a request", type="primary", on_click=go_to, args=("Submit request",))
         return
-    rows = []
-    for index, response in enumerate(history):
-        colour = ui.line_of(response["request_type"])["var"]
-        rows.append(([str(index + 1), ui.id_cell(response["request_id"], colour), ui.esc(response["user_id"]),
-                      ui.esc(ui.line_of(response["request_type"])["label"]), ui.status_pill(response["status"]),
-                      ui.priority_pill(response["priority"])], colour))
-    show(ui.panel(ui.table(["#", "Request", "User", "Line", "Status", "Priority"], rows, scroll=True)))
-    labels = [history_label(index, response) for index, response in enumerate(history)]
-    if st.session_state.get("history_select") not in labels:
-        st.session_state["history_select"] = labels[-1]
-    chosen_label = st.selectbox("Open a response", labels, key="history_select")
-    render_response(system, history[labels.index(chosen_label)])
+    show('<div class="panel-head" style="margin:0"><h2>All requests this session</h2>'
+         '<span class="muted small">Tick a row (box on the left) to open its result</span></div>')
+    response_table(history, "history_table", on_history_row)
+    open_index = st.session_state.get("history_open", len(history) - 1)
+    if not 0 <= open_index < len(history):
+        open_index = len(history) - 1
+    render_response(system, history[open_index])
 
 
 PAGES = {
@@ -875,9 +1056,8 @@ def render_sidebar_history():
         st.sidebar.html(ui.wrap('<p class="side-h">Recent this session</p>'))
         for index in range(len(history) - 1, max(len(history) - 6, -1), -1):
             label = history_label(index, history[index])
-            st.sidebar.button(label, key=f"sidebar_{index}", on_click=open_history_entry, args=(label,),
+            st.sidebar.button(label, key=f"sidebar_{index}", on_click=open_history_entry, args=(index,),
                               width="stretch")
-    st.sidebar.html(ui.wrap('<p class="side-note" style="margin-top:14px">Light / dark: ⋮ menu (top right) → Settings</p>'))
 
 
 def main():
@@ -887,7 +1067,8 @@ def main():
               page. Unexpected errors are shown instead of crashing.
     """
     st.set_page_config(page_title="Smart Campus AI", page_icon="🚉", layout="wide")
-    st.html(ui.page_css(theme_name()))
+    st.html(ui.page_css())
+    visualizer.set_dark_mode(False)
     config.ensure_directories()
     page_name = render_sidebar_navigation()
     title, intro = PAGE_INTROS[page_name]
