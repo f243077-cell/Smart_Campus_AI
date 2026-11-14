@@ -44,11 +44,8 @@ STATION_NAMES = {"Preprocessing": "Preprocessing", "Router": "Router", "ANN": "P
                  "Response": "Final response"}
 # Tone of each final decision (handout: completed, answered, accepted, rejected)
 STATUS_TONES = {"completed": "ok", "answered": "ok", "accepted": "ok", "rejected": "bad", "not entailed": "warn"}
-TONE_VARS = {"ok": "var(--ok)", "bad": "var(--bad)", "warn": "var(--warn)"}
 PRIORITY_CLASS = {"urgent": "p-urgent", "high": "p-high", "normal": "p-normal", "low": "p-low"}
 FIXED_BOOKINGS = ("AI Lab class (DrKhan)", "Reading group", "Admin meeting")
-
-ICON_PLAY = '<svg viewBox="0 0 20 20" aria-hidden="true" style="fill:currentColor"><path d="M6 4l10 6-10 6z"/></svg>'
 
 
 def esc(value):
@@ -114,7 +111,6 @@ section[data-testid="stSidebar"] > div{background:var(--side-bg)}
 section[data-testid="stSidebar"] [class*="st-key-sidebar_"] button{justify-content:flex-start;text-align:left;min-height:44px;border-radius:12px;border:1px solid var(--rule);background:color-mix(in srgb,var(--panel) 55%,transparent);color:var(--side-ink);transition:transform .2s ease,background .2s ease,border-color .2s ease}
 section[data-testid="stSidebar"] [class*="st-key-sidebar_"] button:hover{transform:translateX(3px);background:var(--panel);border-color:color-mix(in srgb,var(--brand) 40%,var(--rule));color:var(--side-ink)}
 section[data-testid="stSidebar"] [class*="st-key-sidebar_"] button p{font-size:12.5px;font-weight:600}
-.side-note{font-size:12px;color:var(--side-ink-2);padding:0 6px}
 
 /* ---------- buttons, inputs, tabs ---------- */
 .stButton button,.stDownloadButton button,.stFormSubmitButton button{min-height:44px;border-radius:999px!important;padding:0 18px;font-weight:600;border:1.5px solid var(--brand);background:transparent;color:var(--brand);transition:background .2s ease,color .2s ease,transform .12s ease,box-shadow .2s ease}
@@ -195,18 +191,9 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 .row{display:flex;flex-wrap:wrap;gap:20px;align-items:stretch}
 .grow{flex:1 1 320px;min-width:0}.grow3{flex:3 1 520px;min-width:0}.grow2{flex:2 1 460px;min-width:0}
 .col{display:flex;flex-direction:column;gap:14px}
-/* status and priority markers: a station symbol plus coloured text */
-.pill{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;white-space:nowrap}
-.pill::before{content:'';flex:none;width:13px;height:13px;border-radius:50%;border:3px solid currentColor;box-sizing:border-box}
-.pill.tone-ok::before{background:radial-gradient(circle,currentColor 0 2px,transparent 2.6px)}
-.pill.tone-bad::before{background:linear-gradient(135deg,transparent 38%,currentColor 38% 62%,transparent 62%)}
-.pill.tone-warn::before{border-width:2.5px;border-style:dashed}
+/* status and priority text colours */
 .tone-ok{color:var(--ok)}.tone-bad{color:var(--bad)}.tone-warn{color:var(--warn)}
 .p-urgent{color:var(--bad)}.p-high{color:var(--accent)}.p-normal{color:var(--l-elig)}.p-low{color:var(--ink-2)}
-.pill.p-urgent::before{width:14px;height:14px;background:currentColor}
-.pill.p-high::before{width:12px;height:12px;background:radial-gradient(circle,currentColor 0 1.6px,transparent 2.2px)}
-.pill.p-normal::before{width:10px;height:10px;border-width:2.5px}
-.pill.p-low::before{width:8px;height:8px;border-width:2px}
 /* home */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
 .tile{padding:18px 20px;border-radius:16px;background:var(--panel);border:1px solid var(--rule-2);box-shadow:var(--shadow);transition:transform .2s ease;animation:rise .5s both}
@@ -249,8 +236,6 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 .sc tr.stream{animation:rowIn .45s cubic-bezier(.2,.8,.2,1) both}
 .sc tr:hover td{background:var(--panel-2)}
 .sc tr:hover td:first-child{box-shadow:inset 4px 0 0 var(--lc,var(--brand))}
-.idcell{display:inline-flex;align-items:center;gap:8px;font-weight:600}
-.idcell i{width:12px;height:12px;border-radius:50%;border:3px solid var(--lc);background:var(--panel)}
 /* result: header, line, stations */
 .result{display:flex;flex-direction:column;gap:18px}
 .rhead{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between}
@@ -534,25 +519,6 @@ def decision_label(response):
     return response["decision"]
 
 
-def status_pill(status):
-    """
-    Function: status_pill
-    Purpose : Decision text with a station symbol (ok / rejected / warning).
-    """
-    tone = STATUS_TONES.get(status, "warn")
-    return f'<span class="pill tone-{tone}">{esc(status)}</span>'
-
-
-def priority_pill(priority):
-    """
-    Function: priority_pill
-    Purpose : Priority text with a dot whose size follows the priority.
-    """
-    if not priority or priority == "-":
-        return '<span class="muted">-</span>'
-    return f'<span class="pill {PRIORITY_CLASS.get(priority, "p-low")}">{esc(priority)}</span>'
-
-
 def empty_state(title, text, colours=("var(--l-nav)", "var(--l-elig)", "var(--l-book)", "var(--l-full)")):
     """
     Function: empty_state
@@ -598,14 +564,6 @@ def table(headers, rows, scroll=False):
         body.append(f'<tr class="stream" style="--lc:{colour};animation-delay:{delay:.2f}s">{cell_html}</tr>')
     return (f'<div class="tablebox{" scroll" if scroll else ""}"><table><thead><tr>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
-
-
-def id_cell(text, colour):
-    """
-    Function: id_cell
-    Purpose : Request id with a station dot in its line colour.
-    """
-    return f'<span class="idcell" style="--lc:{colour}"><i aria-hidden="true"></i>{esc(text)}</span>'
 
 
 # -------------------------------------------------------------------
