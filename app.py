@@ -28,35 +28,36 @@ import visualizer
 from csp_scheduler import EXAM_CONSTRAINT_EDGES, EXAM_GROUPS, EXAM_PRECEDENCE, solve_exam_schedule
 from knowledge_base import KnowledgeBaseError, format_atom, parse_atom
 from main import DEMO_REQUESTS
-from response_layer import log_response
+from response_layer import log_response, standard_response
 from router import PIPELINES, SmartCampusSystem
-from search_navigation import NavigationError, compare_algorithms, trace_search
+from search_navigation import (OPERATIONAL_ALGORITHMS, NavigationError, compare_algorithms, find_route,
+                               trace_search)
 
-POSITIVE_STATUSES = ("COMPLETED", "APPROVED", "DISPATCHED")
-STOPPING_STATUSES = ("REJECTED", "UNSCHEDULABLE", "ERROR")
-DETAIL_KEYS = {"ANN": "ann", "Logic": "logic", "CSP": "csp", "Search": "search"}
+SUCCESS_DECISIONS = ("completed", "answered", "accepted")
+DETAIL_KEYS = {"ANN": "ann", "Logic_KB": "logic", "CSP": "csp", "Search": "search"}
 # Node layout copied from the CSP diagram in the project document (inches).
 CSP_NODE_POSITIONS = {"G1": (0, 2.2), "G4": (3.4, 1.5), "G3": (6.8, 2.2),
                       "G6": (9.8, 1.2), "G2": (1.8, 0), "G5": (7.8, 0)}
-EXAMPLE_QUERIES = ["Eligible(Ali, AI)", "Eligible(Sara, AI)", "Eligible(x, AI)",
-                   "UseLab(DrKhan, Lab1)", "CanBook(Fatima, SeminarRoom)", "HasRole(x, Instructor)"]
+EXAMPLE_QUERIES = ["Eligible(Ali, AI)", "Eligible(Sara, AI)", "Eligible(x, AI)", "UsesLab(DrKhan, Lab1)",
+                   "CanRequest(Sara, AI_Lab_Support)", "RepresentsGroup(x, G4)"]
 OTHER_USER = "Other (type a name)"
-ROUTE_PREFERENCE_LABELS = {"distance": "Shortest distance (A*)", "stops": "Fewest stops (BFS)",
-                           "distance_no_heuristic": "Shortest, no heuristic (UCS)"}
+NO_VALUE = "(none)"
 PAGE_INTROS = {
     "Home": ("Smart Campus AI", "One service desk for the campus. Each request rides one of five lines, "
                                 "stopping at the AI modules it needs, and arrives as one explained answer."),
     "Submit request": ("Submit a request", "Pick a line, say who is asking and fill in what that line needs. "
                                            "The result shows the request travelling stop by stop."),
-    "Demo requests": ("Demo requests", "Nine ready-made requests, one per line plus a rejection and an invalid input. "
-                                       "The same requests the CLI demo runs."),
+    "Demo requests": ("Demo requests", "Nine ready-made requests from the handout: one per request type plus "
+                                       "rejections at Logic / KB, CSP and preprocessing. The same requests the CLI demo runs."),
     "Batch CSV": ("Batch processing", "Run a whole file of requests through the network and download the results."),
-    "ANN models": ("Priority network", "A perceptron and a 7-4-3-4 MLP, written from scratch in numpy. "
-                                       "They predict priority only, never permission."),
+    "ANN models": ("Priority network", "A Perceptron baseline (urgent vs not urgent) and the final 7-4-3-4 MLP "
+                                       "(urgent / high / normal / low), written from scratch in numpy. They predict "
+                                       "priority only, never permission."),
     "Knowledge base": ("Knowledge base", "First-order facts and rules. Ask a goal and the system chains backward "
                                          "to known facts, or browse what forward chaining derives."),
-    "Navigation": ("Campus navigation", "The same trip searched three ways. Compare the final routes of BFS, UCS and A*, "
-                                        "then step through every decision each one makes on a separate graph."),
+    "Navigation": ("Campus navigation", "Comparison mode runs all nine search algorithms on one trip; operational "
+                                        "mode (used by requests) runs only the one the policy picks. Step through every "
+                                        "decision of BFS, UCS and A* on a separate graph."),
     "CSP schedule": ("Scheduling", "The exam timetable solved as a constraint problem with AC-3, MRV, LCV and "
                                    "forward checking, plus every room booking so far."),
     "History": ("Session history", "Every request made in this browser session. Open any of them again."),
@@ -153,7 +154,7 @@ def history_label(index, response):
     Purpose : Unique, readable label for a history entry (invalid requests
               all have request id '-', so the position number is included).
     """
-    return f"#{index + 1}  {response['request_id']}  {response['user_id']}  {response['status']}"
+    return f"#{index + 1}  {response['request_id']}  {response['name']}  {response['decision']}"
 
 
 def open_history_entry(index):
@@ -203,17 +204,27 @@ def find_in_history(request_id):
     return None
 
 
+def response_summary(response):
+    """
+    Function: response_summary
+    Purpose : One table row for a response (history and batch tables).
+    """
+    assignment, route = response["assignment"], response["route"]
+    return {"Request": response["request_id"], "Name": response["name"],
+            "Request type": ui.line_of(response["request_type"])["label"],
+            "Decision": ui.decision_label(response), "Rejected at": response.get("rejected_at") or "-",
+            "Priority": response["priority"].get("final_priority", "-"),
+            "Assignment": f"{assignment['room']} · slot {assignment['slot']}" if assignment else "-",
+            "Route": " → ".join(route["path"]).replace("_", " ") if route else "-",
+            "Message": response["message"]}
+
+
 def response_table(responses, key, on_click=None):
     """
     Function: response_table
     Purpose : Selectable table of responses: clicking a row opens it.
     """
-    frame = pd.DataFrame([{"Request": response["request_id"], "User": response["user_id"],
-                           "Line": ui.line_of(response["request_type"])["label"], "Status": response["status"],
-                           "Priority": response["priority"] or "-",
-                           "Assignment": response["assignment"] or "-",
-                           "Route": (response["route"] or "-").replace("_", " "),
-                           "Explanation": response["explanation"][-1]} for response in responses])
+    frame = pd.DataFrame([response_summary(response) for response in responses])
     frame.index = range(1, len(frame) + 1)
     st.dataframe(frame, key=key, on_select=on_click or "rerun", selection_mode="single-row",
                  width="stretch", height=min(38 + 35 * len(frame), 420))
@@ -222,12 +233,12 @@ def response_table(responses, key, on_click=None):
 def known_users(system):
     """
     Function: known_users
-    Purpose : Map every registered user in the KB to their role, using the
-              query HasRole(?x, ?r).
+    Purpose : Map every registered user in the KB to their role (lower
+              case, as in requests), using the query HasRole(?x, ?r).
     """
     users = {}
     for answer in system.knowledge_base.ask(("HasRole", "?x", "?r"))["answers"]:
-        users.setdefault(answer["?x"], answer["?r"])
+        users.setdefault(answer["?x"], answer["?r"].lower())
     return dict(sorted(users.items()))
 
 
@@ -241,16 +252,17 @@ def pipeline_states(response):
               'ok' (ran fine), 'error' (stopped the pipeline) or 'skip'.
     Returns : list of (module_name, state, summary_text)
     """
-    if response["status"] == "INVALID":
-        return [("Preprocessing", "error", response["explanation"][0]), ("Router", "skip", "not reached")]
-    stages = [("Preprocessing", "ok", "request validated and normalized"),
-              ("Router", "ok", " → ".join(response["pipeline"]))]
-    last_module = response["modules_run"][-1] if response["modules_run"] else None
-    for module in response["pipeline"]:
+    if response.get("rejected_at") == "Preprocessing":
+        return [("Preprocessing", "error", response["explanation"][0].split(" - ", 1)[-1]),
+                ("Router", "skip", "not reached")]
+    stages = [("Preprocessing", "ok", "validated and normalized"),
+              ("Router", "ok", f"{len(response['selected_pipeline'])} module"
+                               f"{'s' if len(response['selected_pipeline']) != 1 else ''} selected")]
+    for module in response["selected_pipeline"]:
         if module not in response["modules_run"]:
-            stages.append((module, "skip", "not served"))
+            stages.append((module, "skip", "not reached"))
             continue
-        failed = module == last_module and response["status"] in STOPPING_STATUSES
+        failed = module == response.get("rejected_at")
         stages.append((module, "error" if failed else "ok", module_summary(response, module)))
     return stages
 
@@ -262,15 +274,17 @@ def module_summary(response, module):
     """
     details = response["details"].get(DETAIL_KEYS[module])
     if details is None:
-        return response["explanation"][-1]
+        return response["message"]
     if module == "ANN":
-        return f"{details['priority']} ({details['confidence']:.0%})"
-    if module == "Logic":
-        return "permission allowed" if details["allowed"] else "permission denied"
+        return f"{details['final_priority']} ({details['confidence']:.0%}) · perceptron {details['binary_priority']}"
+    if module == "Logic_KB":
+        if response["request_type"] == "Eligibility_Check" and details["allowed"]:
+            return "query entailed" if details["entailed"] else "query not entailed"
+        return "allowed" if details["allowed"] else f"not allowed: {details['query']}"
     if module == "CSP":
-        return (response["assignment"] if details["success"]
-                else f"no room: {'; '.join(details['reasons'])}")
-    return f"{details['algorithm']}, cost {details['cost']}"
+        return (f"{details['assigned_room']} · slot {details['assigned_slot']}" if details["decision"] == "accepted"
+                else details["notes"])
+    return f"{details['algorithm_used']}, cost {details['cost']}"
 
 
 # -------------------------------------------------------------------
@@ -280,8 +294,9 @@ def render_response(system, response):
     """
     Function: render_response
     Purpose : Show one final response: the request travelling its line,
-              key results next to the route map, details at each stop, and
-              the numbered explanation.
+              the standard response parts next to the route map, details
+              at each stop, the explanation, and the router output and
+              final response objects in the handout format.
     """
     line = ui.line_of(response["request_type"])
     details = response["details"]
@@ -289,29 +304,31 @@ def render_response(system, response):
 
     search = details.get("search")
     if response["route"] and search:
-        route_meta = (f"{search['algorithm']} · cost {search['cost']} · {search['hops']} stops · "
+        route_meta = (f"{search['algorithm_used']} · cost {search['cost']} · {search['steps']} steps · "
                       f"{search['nodes_expanded']} nodes expanded")
         route_body = (ui.campus_map(system.campus_graph, search["path"], line=line["var"],
-                                    label=f"Route {response['route']}")
+                                    label="Route " + " to ".join(search["path"][::max(len(search["path"]) - 1, 1)]))
                       + f'<p class="small" style="margin-top:8px"><b>Path:</b> '
                         f'{" → ".join(ui.nice(node) for node in search["path"])}</p>')
     else:
-        route_meta = "this line does not stop at Search" if "Search" not in response["pipeline"] else "no route"
+        route_meta = ("no route guidance needed" if "Search" not in response["selected_pipeline"]
+                      else "route not computed")
         route_body = (ui.campus_map(system.campus_graph, line=line["var"])
                       + f'<p class="small muted" style="margin-top:8px">No route on this request: {ui.esc(route_meta)}.</p>')
     show(f'<div class="row" style="--line:{line["var"]}">'
-         + ui.panel(ui.key_results(response), "Key results", css_class="grow")
+         + ui.panel(ui.key_results(response) + f'<p class="small" style="margin-top:14px">{ui.esc(response["message"])}</p>',
+                    "Final response", css_class="grow")
          + ui.panel(route_body, "Route", route_meta, "grow3") + "</div>")
     if response["route"] and search and len(search["path"]) > 1:
         file_name = f"route_{response['request_id']}.png"
         route_png = saved_chart(("route", response["request_id"], tuple(search["path"])),
                                 lambda: visualizer.plot_campus_graph(system.campus_graph, search["path"],
-                                                                     f"Route: {response['route']}", file_name))
+                                                                     "Route: " + " -> ".join(search["path"]), file_name))
         chart_downloads([route_png], f"png_{response['request_id']}_{response['timestamp']}")
 
     show(f'<div style="--line:{line["var"]}"><div class="panel-head" style="margin:6px 0 0"><h2>At each stop</h2>'
          f'<span class="muted small">Only the modules that ran</span></div></div>')
-    ran = [module for module in ("ANN", "Logic", "CSP", "Search") if DETAIL_KEYS[module] in details]
+    ran = [module for module in ("ANN", "Logic_KB", "CSP", "Search") if DETAIL_KEYS[module] in details]
     if not ran:
         show(ui.panel('<p class="muted">No AI module ran for this request, so there are no module details. '
                       'The explanation below lists what was wrong with the input.</p>'))
@@ -320,15 +337,20 @@ def render_response(system, response):
         for tab, module in zip(tabs, ran):
             with tab:
                 show(f'<div style="--line:{line["var"]}">{module_detail(response, module)}</div>')
-                if module == "Search" and search and len(search["path"]) > 1:
+                if module == "Search" and search and len(search["path"]) > 1 and search["algorithm_used"] in ("BFS", "UCS", "A*"):
                     with st.expander("How the search decided, step by step", expanded=False):
-                        render_search_steps(system, search["path"][0], search["path"][-1], search["algorithm"],
+                        render_search_steps(system, search["path"][0], search["path"][-1], search["algorithm_used"],
                                             key=f"result_{response['request_id']}_{response['timestamp']}")
 
     show(ui.explanation(response["explanation"]))
-    if details.get("request"):
-        with st.expander("Raw request data (after preprocessing)"):
-            st.json(details["request"])
+    with st.expander("Standard objects (handout format): request, router output, final response"):
+        object_columns = st.columns(3)
+        object_columns[0].caption("Request object (after preprocessing)")
+        object_columns[0].json(details.get("request") or details.get("raw_request", {}))
+        object_columns[1].caption("Router output")
+        object_columns[1].json(details.get("router", {}))
+        object_columns[2].caption("Final response")
+        object_columns[2].json(standard_response(response))
 
 
 def module_detail(response, module):
@@ -339,26 +361,31 @@ def module_detail(response, module):
     details = response["details"]
     if module == "ANN":
         ann = details["ann"]
+        vector = ", ".join(ui.number(value) for value in ann["features"].values())
         return ui.panel(f'<div class="row"><div class="grow">{ui.probability_bars(ann["probabilities"])}'
-                        f'<p class="small" style="margin-top:8px">Perceptron says urgent: '
-                        f'<b>{"Yes" if ann["perceptron_urgent"] else "No"}</b></p>'
+                        f'<p class="small" style="margin-top:8px">binary_priority (Perceptron): <b>{ui.esc(ann["binary_priority"])}</b>'
+                        f' · final_priority (MLP): <b>{ui.esc(ann["final_priority"])}</b></p>'
                         f'<p class="small muted">The ANN predicts priority only. It never grants permission.</p></div>'
-                        f'<div class="grow2"><h3 style="margin-bottom:8px">Scaled inputs</h3>{ui.feature_chips(ann["features"])}</div></div>')
-    if module == "Logic":
-        return ui.panel(ui.logic_checks(details["logic"]["checks"]))
+                        f'<div class="grow2"><h3 style="margin-bottom:8px">Feature vector x = [{vector}]</h3>'
+                        f'{ui.feature_chips(ann["features"], ann["scaled_features"])}</div></div>')
+    if module == "Logic_KB":
+        logic = details["logic"]
+        return ui.panel(ui.logic_checks(logic["checks"])
+                        + f'<p class="small muted" style="margin-top:6px">allowed = {logic["allowed"]} · '
+                          f'entailed = {logic["entailed"]}</p>')
     if module == "CSP":
         csp = details["csp"]
         body = ""
-        if csp["assignments"]:
-            rows = [([ui.esc(assignment["session"]), ui.nice(assignment["room"]), ui.esc(assignment["capacity"]),
-                      ui.esc(assignment["slot"]), ui.nice(assignment["building"])], "var(--line)")
-                    for assignment in csp["assignments"]]
-            body += ui.table(["Session", "Room", "Capacity", "Slot", "Building"], rows)
-        body += "".join(f'<p class="miss" style="margin-top:8px">{ui.esc(reason)}</p>' for reason in csp["reasons"])
+        if csp["decision"] == "accepted":
+            room = config.ROOMS[csp["assigned_room"]]
+            rows = [([ui.nice(csp["assigned_room"]), str(csp["assigned_slot"]), ui.esc(csp["slot_time"]),
+                      ui.nice(csp["destination"]), ui.esc(room["capacity"]), ui.esc(csp["group_size"])], "var(--line)")]
+            body += ui.table(["Assigned room", "Slot", "Time", "Destination", "Capacity", "Group size"], rows)
+        body += f'<p class="{"small" if csp["decision"] == "accepted" else "miss"}" style="margin-top:10px">{ui.esc(csp["notes"])}</p>'
         stats = csp["statistics"]
-        body += (f'<p class="small muted" style="margin-top:10px">Domain size {csp["domain_size"]} · '
-                 f'{stats["assignments_tried"]} values tried · {stats["backtracks"]} backtracks · '
-                 f'{stats["ac3_pruned"]} pruned by AC-3</p>')
+        body += (f'<p class="small muted" style="margin-top:6px">Rooms considered: '
+                 f'{", ".join(ui.nice(room) for room in csp["rooms_considered"])} · domain size {csp["domain_size"]} · '
+                 f'{stats["assignments_tried"]} values tried · {stats["backtracks"]} backtracks</p>')
         return ui.panel(body)
     search = details["search"]
     body = f'<p><b>Policy:</b> {ui.esc(search["policy"])}</p>'
@@ -415,13 +442,14 @@ def page_home(system):
         columns[0].button("Run all 9 demos", type="primary", on_click=run_all_demos, args=(system,))
         columns[1].button("Submit a request", on_click=go_to, args=("Submit request",))
     else:
-        status_counts = results_log["status"].value_counts()
+        decision_counts = results_log["decision"].value_counts()
+        rejected_at = results_log["rejected_at"].fillna("").value_counts()
         show(ui.tiles([
             (len(results_log), "Requests processed", "brand"),
-            (int(status_counts.reindex(POSITIVE_STATUSES).fillna(0).sum()), "Completed or approved", "ok"),
-            (int(status_counts.get("REJECTED", 0)), "Rejected by the knowledge base", "bad"),
-            (int(status_counts.get("INVALID", 0) + status_counts.get("UNSCHEDULABLE", 0)),
-             "Invalid or unschedulable", "warn"),
+            (int(decision_counts.reindex(SUCCESS_DECISIONS).fillna(0).sum()), "Completed, answered or accepted", "ok"),
+            (int(rejected_at.get("Logic_KB", 0)), "Rejected by Logic / KB", "bad"),
+            (int(rejected_at.get("Preprocessing", 0) + rejected_at.get("CSP", 0) + rejected_at.get("Search", 0)),
+             "Rejected at input, CSP or Search", "warn"),
         ]))
 
     facts = [(len(system.campus_graph.nodes), "campus locations"), (len(system.knowledge_base.rules), "KB rules"),
@@ -436,15 +464,15 @@ def page_home(system):
         type_items = [(ui.line_of(request_type)["label"], int(type_counts.get(request_type, 0)),
                        ui.line_of(request_type)["var"]) for request_type in ui.LINES]
         show('<div class="row">'
-             + ui.panel(ui.status_stack(status_counts.to_dict()), "By status", css_class="grow")
+             + ui.panel(ui.status_stack(decision_counts.to_dict()), "By decision", css_class="grow")
              + ui.panel(ui.hbars(type_items), "By request type", css_class="grow") + "</div>")
         show('<div class="panel-head" style="margin:6px 0 0"><h2>Last 10 requests</h2>'
              '<span class="muted small">From outputs/results_log.csv · tick a row to open it</span></div>')
         last = results_log.tail(10).iloc[::-1].reset_index(drop=True)
-        shown = last[["request_id", "user_id", "request_type", "status", "priority", "route"]].fillna("-").copy()
+        shown = last[["request_id", "name", "request_type", "decision", "final_priority", "route"]].fillna("-").copy()
         shown["request_type"] = shown["request_type"].map(lambda request_type: ui.line_of(request_type)["label"])
-        shown["route"] = shown["route"].str.replace("_", " ")
-        shown.columns = ["Request", "User", "Line", "Status", "Priority", "Route"]
+        shown["route"] = shown["route"].astype(str).str.replace("_", " ")
+        shown.columns = ["Request", "Name", "Request type", "Decision", "Priority", "Route"]
         st.session_state["home_last_ids"] = last["request_id"].tolist()
         st.session_state["home_last_rows"] = last.fillna("-").to_dict("records")
         st.dataframe(shown, key="home_table", on_select=on_home_row, selection_mode="single-row",
@@ -484,58 +512,84 @@ def on_home_row():
 def page_submit_request(system):
     """
     Function: page_submit_request
-    Purpose : Form for a new request. Request type, user and role sit
-              outside the form so the fields update immediately; the role
-              is auto-filled from the knowledge base.
+    Purpose : Structured request form (same fields as the CLI form): name,
+              role and request type first, then only the fields that
+              request type uses (handout 2.2). Request type, name and role
+              sit outside the form so the fields update immediately; the
+              role is filled in from the knowledge base.
     """
-    show('<div class="panel-head" style="margin:0"><h2>Choose a line</h2>'
-         '<span class="muted small">The line decides which AI modules the request stops at</span></div>')
+    show('<div class="panel-head" style="margin:0"><h2>Choose a request type</h2>'
+         '<span class="muted small">The request type decides which AI modules the request stops at</span></div>')
     request_type = st.radio("Request type", config.REQUEST_TYPES, key="req_type", horizontal=True,
-                            format_func=lambda request_type_name: f"{ui.line_of(request_type_name)['label']}\n\n{' → '.join(PIPELINES[request_type_name])}")
+                            format_func=lambda request_type_name: f"{ui.line_of(request_type_name)['label']}\n\n"
+                                                                  f"{' → '.join(PIPELINES[request_type_name])}")
     line = ui.line_of(request_type)
 
     show('<div class="panel-head" style="margin:10px 0 0"><h2>Who is asking</h2>'
          '<span class="muted small">Role is filled in from the knowledge base and can be changed to test the role check</span></div>')
     users = known_users(system)
     user_columns = st.columns(2)
-    user_choice = user_columns[0].selectbox("User", list(users) + [OTHER_USER])
-    user_id = user_columns[0].text_input("New user name", placeholder="e.g. Zara") if user_choice == OTHER_USER else user_choice
-    default_role = users.get(user_choice, "Student")
+    user_choice = user_columns[0].selectbox("Name", list(users) + [OTHER_USER])
+    name = user_columns[0].text_input("New name", placeholder="e.g. Zara") if user_choice == OTHER_USER else user_choice
+    default_role = users.get(user_choice, "student")
     role = user_columns[1].segmented_control("Role", config.VALID_ROLES, default=default_role,
                                              key=f"role_for_{user_choice}") or default_role
 
+    required = config.TYPE_REQUIRED_FIELDS[request_type]
+    optional = config.TYPE_OPTIONAL_FIELDS[request_type]
+    fields = required + optional
     locations = system.campus_graph.nodes
-    show(f'<div class="panel-head" style="margin:10px 0 0"><h2>What the {ui.esc(line["label"])} line needs</h2></div>')
+    slot_options = config.SLOT_NUMBERS
+
+    def nice_location(location):
+        """
+        Function: nice_location
+        Purpose : Show Main_Gate as 'Main Gate' in the form.
+        """
+        return location.replace("_", " ")
+
+    show(f'<div class="panel-head" style="margin:10px 0 0"><h2>What a {ui.esc(request_type)} request needs</h2>'
+         f'<span class="muted small">Required: {", ".join(required)}'
+         + (f' · optional: {", ".join(optional)}' if optional else "") + "</span></div>")
     with st.form("request_form"):
-        raw_request = {"request_type": request_type, "user_id": user_id, "role": role}
+        raw_request = {"name": name, "role": role, "request_type": request_type}
+        if "category" in fields:
+            raw_request["category"] = st.radio("Category", config.CATEGORIES, horizontal=True,
+                                               format_func=lambda category: category.replace("_", " "))
         columns = st.columns(2)
-        if request_type in ("Navigation_Only", "Urgent_Service_Request", "Full_Service_Request"):
-            raw_request["source"] = columns[0].selectbox("Current location", locations, index=locations.index("Main_Gate"),
-                                                         format_func=lambda location: location.replace("_", " "))
-        if request_type == "Navigation_Only":
-            raw_request["destination"] = columns[1].selectbox("Destination", locations, index=locations.index("AI_Lab"),
-                                                              format_func=lambda location: location.replace("_", " "))
-        if request_type == "Eligibility_Check":
-            raw_request["target"] = columns[0].selectbox("Course or resource", system.eligibility_targets())
-        if request_type in ("Booking_or_Scheduling", "Full_Service_Request"):
-            booking_columns = st.columns(4)
-            raw_request["resource_type"] = booking_columns[0].selectbox("Resource type", config.RESOURCE_TYPES)
-            raw_request["group_size"] = booking_columns[1].number_input("Group size", 1, 500, 10)
-            raw_request["preferred_slot"] = booking_columns[2].selectbox(
-                "Preferred time slot", [""] + config.TIME_SLOTS, format_func=lambda slot: slot or "Any slot")
-            raw_request["sessions"] = booking_columns[3].number_input("Sessions", 1, len(config.TIME_SLOTS), 1)
-        if request_type in ("Navigation_Only", "Full_Service_Request"):
-            raw_request["route_preference"] = st.radio(
-                "Route preference", config.ROUTE_PREFERENCES, horizontal=True,
-                format_func=lambda preference: ROUTE_PREFERENCE_LABELS.get(preference, preference))
-        if request_type == "Urgent_Service_Request":
-            raw_request["service_type"] = st.radio("Service needed", list(config.SERVICE_DESTINATIONS), horizontal=True,
-                                                   format_func=lambda service: service.replace("_", " "))
-        if request_type in ("Urgent_Service_Request", "Full_Service_Request"):
+        if "current_location" in fields:
+            location_options = locations if "current_location" in required else [NO_VALUE] + locations
+            label = "Current location" if "current_location" in required else "Current location (for route guidance)"
+            raw_request["current_location"] = columns[0].selectbox(
+                label, location_options, index=location_options.index("Hostel"), format_func=nice_location)
+        if "destination" in fields:
+            raw_request["destination"] = columns[1].selectbox("Destination", locations,
+                                                              index=locations.index("AI_Lab"), format_func=nice_location)
+        if "preferred_slot" in fields:
+            options = slot_options if "preferred_slot" in required else [NO_VALUE] + slot_options
+            raw_request["preferred_slot"] = columns[1].segmented_control(
+                "Preferred slot" + ("" if "preferred_slot" in required else " (optional)"), options,
+                default=2 if "preferred_slot" in required else NO_VALUE,
+                format_func=lambda slot: slot if slot == NO_VALUE else f"{slot} · {config.TIME_SLOTS[slot - 1][:5]}")
+        if "group_id" in fields:
+            raw_request["group_id"] = columns[0].selectbox("Group (if group-based)", [NO_VALUE] + config.GROUP_IDS)
+        if "query" in fields:
+            raw_request["query"] = st.text_input("Query", value="Eligible(Ali, AI)",
+                                                 help="A first-order logic goal, e.g. Eligible(Ali, AI), "
+                                                      "UsesLab(DrKhan, Lab1) or CanRequest(Sara, AI_Lab_Support)")
+        if "severity" in fields:
             level_columns = st.columns(3)
-            raw_request["severity"] = level_columns[0].slider("Severity", 1, 5, 3)
-            raw_request["time_sensitivity"] = level_columns[1].slider("Time sensitivity", 1, 5, 3)
-            raw_request["crowd_level"] = level_columns[2].slider("Crowd level", 1, 5, 2)
+            raw_request["severity"] = level_columns[0].slider("Severity", config.LEVEL_MIN, config.LEVEL_MAX, 8)
+            raw_request["time_sensitivity"] = level_columns[1].slider("Time sensitivity", config.LEVEL_MIN,
+                                                                      config.LEVEL_MAX, 9)
+            raw_request["crowd_level"] = level_columns[2].slider("Crowd level", config.LEVEL_MIN, config.LEVEL_MAX, 5)
+            raw_request["eligibility_claim"] = st.toggle(
+                "Eligibility claim", value=False,
+                help="Feature x7 of the ANN. When off, x7 says whether the knowledge base knows the requester.")
+        if "description_note" in fields:
+            raw_request["description_note"] = st.text_area("Description note (optional)", max_chars=300, height=80,
+                                                           placeholder="Need urgent help before practical evaluation.")
+        raw_request = {key: value for key, value in raw_request.items() if value not in (NO_VALUE, None, "")}
         footer = st.columns([3, 1])
         footer[0].html(ui.wrap('<div style="display:flex;align-items:center;gap:12px;padding-top:10px">'
                                '<span class="muted small">Stops:</span><span style="width:260px">'
@@ -556,7 +610,7 @@ def page_demo_requests(system):
     with columns[0]:
         chosen_index = st.radio("Demo request", range(len(titles)), key="demo_pick",
                                 format_func=lambda demo_index: f"{demo_index + 1:02d}  ·  "
-                                                               f"{DEMO_REQUESTS[demo_index]['request'].get('user_id', '?')}\n\n"
+                                                               f"{DEMO_REQUESTS[demo_index]['request'].get('name', '?')}\n\n"
                                                                f"{titles[demo_index].replace('_', ' ')}")
     demo = DEMO_REQUESTS[chosen_index]
     with columns[1]:
@@ -576,8 +630,9 @@ def page_batch_csv(system):
     Purpose : Process every row of a CSV (default sample file or an
               uploaded one) and show a summary table.
     """
-    show('<div class="panel-head" style="margin:0"><h2>Requests file</h2><span class="muted small">CSV with a user_id '
-         'and request_type column; the sample file is used if you upload nothing</span></div>')
+    show('<div class="panel-head" style="margin:0"><h2>Requests file</h2><span class="muted small">CSV with the '
+         'standard request fields as columns (name, role, request_type, category, current_location, ...); '
+         'the sample file is used if you upload nothing</span></div>')
     uploaded_file = st.file_uploader("Choose a CSV or drop it here", type="csv")
     if st.button("▶  Process CSV", type="primary"):
         try:
@@ -594,12 +649,7 @@ def page_batch_csv(system):
             raw_request = {key: value for key, value in row.to_dict().items() if value != ""}
             response = process_and_store(system, raw_request)
             batch_responses.append(response)
-            summary_rows.append({"request_id": response["request_id"], "user": response["user_id"],
-                                 "type": response["request_type"], "status": response["status"],
-                                 "priority": response["priority"] or "-",
-                                 "assignment": response["assignment"] or "-",
-                                 "route": response["route"] or "-",
-                                 "explanation": response["explanation"][-1]})
+            summary_rows.append(response_summary(response))
             progress_bar.progress(row_number / len(requests_frame),
                                   text=f"Processing {row_number} of {len(requests_frame)}")
         progress_bar.empty()
@@ -611,7 +661,7 @@ def page_batch_csv(system):
         show(ui.empty_state("Nothing processed yet", "Press Process CSV to run the sample file, or upload your own first.",
                             ("var(--l-book)", "var(--l-urg)", "var(--l-nav)")))
         return
-    show(ui.panel(ui.status_stack(summary["status"].value_counts().to_dict()), f"{len(summary)} requests processed"))
+    show(ui.panel(ui.status_stack(summary["Decision"].value_counts().to_dict()), f"{len(summary)} requests processed"))
     show('<div class="panel-head" style="margin:6px 0 0"><h2>Results</h2>'
          '<span class="muted small">Tick a row (box on the left) to open its full result below</span></div>')
     responses = st.session_state.get("batch_responses", [])
@@ -633,45 +683,50 @@ def page_ann_models(system):
          '<span class="muted small">Every change runs the trained network again</span></div>')
     input_column, network_column, output_column = st.columns([1.25, 2.3, 1.05], gap="medium")
     with input_column:
-        role = st.segmented_control("Role", config.VALID_ROLES, default="Student", key="wi_role") or "Student"
-        request_type = st.selectbox("Request type", config.REQUEST_TYPES, index=3,
-                                    format_func=lambda request_type_name: ui.line_of(request_type_name)["label"])
-        severity = st.slider("Severity", 1, 5, 4)
-        time_sensitivity = st.slider("Time sensitivity", 1, 5, 4)
-        crowd_level = st.slider("Crowd level", 1, 5, 2)
-        distance = st.slider("Route distance", 0.0, config.MAX_ROUTE_DISTANCE, 5.0, 0.5)
-        eligible = st.toggle("Registered / eligible user", value=True)
+        role = st.segmented_control("x1 Role", config.VALID_ROLES, default="student", key="wi_role") or "student"
+        category = st.selectbox("x2 RequestType (category)", config.CATEGORIES,
+                                format_func=lambda category_name: category_name.replace("_", " "))
+        severity = st.slider("x3 Severity", config.LEVEL_MIN, config.LEVEL_MAX, 8)
+        time_sensitivity = st.slider("x4 Time sensitivity", config.LEVEL_MIN, config.LEVEL_MAX, 9)
+        crowd_level = st.slider("x5 Crowd level", config.LEVEL_MIN, config.LEVEL_MAX, 5)
+        distance = st.slider("x6 Distance (route cost)", 0.0, config.MAX_ROUTE_DISTANCE, 4.0, 0.5)
+        eligible = st.toggle("x7 Eligibility", value=True)
     feature_vector = preprocessing.build_feature_vector(
-        {"role": role, "request_type": request_type, "severity": severity,
+        {"role": role, "category": category, "severity": severity,
          "time_sensitivity": time_sensitivity, "crowd_level": crowd_level}, distance, eligible)
     prediction = predictor.predict(feature_vector)
     with network_column:
-        show(ui.nn_diagram(predictor.mlp, list(prediction["features"].values()), config.ANN_FEATURE_NAMES,
+        show(ui.nn_diagram(predictor.mlp, list(prediction["scaled_features"].values()), config.ANN_FEATURE_NAMES,
                            config.PRIORITY_CLASSES)
              + '<p class="muted small" style="text-align:center">Inputs → 4 hidden → 3 hidden → 4 priorities. '
                "Edge colour is the weight's sign, thickness its strength.</p>")
     with output_column:
-        tone = ui.PRIORITY_CLASS.get(prediction["priority"], "")
-        show(f'<div class="col"><div><span class="muted small">Predicted priority</span>'
-             f'<div class="predword {tone}" aria-live="polite">{ui.esc(prediction["priority"])}</div>'
-             f'<span class="muted small">{prediction["confidence"]:.0%} confidence</span></div>'
-             f'<div class="small">Perceptron says urgent: <b>{"Yes" if prediction["perceptron_urgent"] else "No"}</b></div>'
+        tone = ui.PRIORITY_CLASS.get(prediction["final_priority"], "")
+        show(f'<div class="col"><div><span class="muted small">final_priority (MLP)</span>'
+             f'<div class="predword {tone}" aria-live="polite">{ui.esc(prediction["final_priority"])}</div>'
+             f'<span class="muted small">confidence {prediction["confidence"]:.2f}</span></div>'
+             f'<div class="small">binary_priority (Perceptron): <b>{ui.esc(prediction["binary_priority"])}</b></div>'
              f'<div style="--line:var(--brand)">{ui.probability_bars(prediction["probabilities"])}</div>'
              '<p class="small muted">The ANN predicts priority only. It never decides permission, rooms or routes.</p></div>')
-    show(ui.feature_chips(prediction["features"]))
+    vector = ", ".join(ui.number(value) for value in prediction["features"].values())
+    show(f'<p class="small" style="margin-bottom:8px"><b>x = [{vector}]</b> '
+         '<span class="muted">(fixed order Role, RequestType, Severity, TimeSensitivity, CrowdLevel, Distance, '
+         'Eligibility; the network scales it to [0, 1])</span></p>'
+         + ui.feature_chips(prediction["features"], prediction["scaled_features"]))
 
     st.write("")
     head_columns = st.columns([4, 1])
     head_columns[0].html(ui.wrap('<div class="panel-head" style="margin:0"><h2>Training</h2></div>'
                                  '<p class="muted" style="max-width:72ch">Two models learn from the same generated '
-                                 'requests. A perceptron answers one question: is this urgent? A 7-4-3-4 multilayer '
-                                 'perceptron picks one of four priorities. 80% of rows train, 20% test.</p>'))
+                                 'requests. The Perceptron (baseline / comparison) answers one question: urgent or '
+                                 'not_urgent? The 7-4-3-4 MLP (final operational model) picks urgent, high, normal or '
+                                 'low; its priority drives scheduling. 80% of rows train, 20% test.</p>'))
     if head_columns[1].button("Retrain models", type="primary", width="stretch"):
         with st.spinner("Training..."):
             st.session_state["ann_metrics"] = predictor.train(verbose=False)
             trained = st.session_state["ann_metrics"]
             st.session_state["ann_pngs"] = [
-                visualizer.plot_confusion_matrix(trained["perceptron_confusion"], ["Not urgent", "Urgent"],
+                visualizer.plot_confusion_matrix(trained["perceptron_confusion"], config.BINARY_CLASSES,
                                                  "Perceptron confusion matrix", "perceptron_confusion.png"),
                 visualizer.plot_confusion_matrix(trained["mlp_confusion"], config.PRIORITY_CLASSES,
                                                  "MLP confusion matrix", "mlp_confusion.png"),
@@ -707,11 +762,11 @@ def page_ann_models(system):
         show('<div class="row">' + "".join(charts) + "</div>")
     if metrics:
         distribution = metrics["class_distribution"]
-        colours = {"Urgent": "var(--bad)", "High": "var(--accent)", "Normal": "var(--l-elig)", "Low": "var(--ink-3)"}
+        colours = {"urgent": "var(--bad)", "high": "var(--accent)", "normal": "var(--l-elig)", "low": "var(--ink-3)"}
         dist_items = [(name, int(distribution.get(name, 0)), colours.get(name, "var(--brand)"))
                       for name in config.PRIORITY_CLASSES]
         show('<div class="row">'
-             + ui.panel(ui.confusion(metrics["perceptron_confusion"], ["No", "Yes"]), "Perceptron confusion (2×2)", css_class="grow")
+             + ui.panel(ui.confusion(metrics["perceptron_confusion"], ["not urgent", "urgent"]), "Perceptron confusion (2×2)", css_class="grow")
              + ui.panel(ui.confusion(metrics["mlp_confusion"], config.PRIORITY_CLASSES), "MLP confusion (4×4)", css_class="grow2")
              + ui.panel(ui.hbars(dist_items, 70), "Class distribution", css_class="grow") + "</div>")
 
@@ -907,42 +962,66 @@ def render_search_steps(system, source, destination, algorithm_name, key):
 def page_navigation(system):
     """
     Function: page_navigation
-    Purpose : Compare BFS, UCS and A* on a route (final result), then
-              step through the decisions each algorithm makes on a
+    Purpose : Search module in both modes (handout 4.1):
+                * operational - the ONE route the policy returns (graph
+                  type weighted/unweighted, heuristic on/off),
+                * comparison  - all nine algorithms on the same trip,
+              then step through the decisions of BFS, UCS or A* on a
               separate decision graph.
     """
     locations = system.campus_graph.nodes
-    st.session_state.setdefault("nav_from", "Main_Gate")
+    st.session_state.setdefault("nav_from", "Hostel")
     st.session_state.setdefault("nav_to", "AI_Lab")
     columns = st.columns([2, 2, 1], vertical_alignment="bottom")
     source = columns[0].selectbox("From", locations, key="nav_from", format_func=lambda location: location.replace("_", " "))
     destination = columns[1].selectbox("To", locations, key="nav_to", format_func=lambda location: location.replace("_", " "))
     columns[2].button("⇄  Swap", on_click=swap_route, width="stretch")
+    policy_columns = st.columns([2, 2, 1], vertical_alignment="bottom")
+    graph_type = policy_columns[0].segmented_control("Graph type (search policy)", config.GRAPH_TYPES,
+                                                     default=config.DEFAULT_GRAPH_TYPE, key="nav_graph_type") \
+        or config.DEFAULT_GRAPH_TYPE
+    use_heuristic = policy_columns[1].toggle("Heuristic available (building coordinates)", value=True,
+                                             disabled=graph_type == "unweighted", key="nav_heuristic")
     if source == destination:
         show('<p class="warnbox" role="alert">From and To are the same place. '
              'Pick a different destination to compare routes.</p>')
         return
     try:
+        operational = find_route(source, destination, graph_type, use_heuristic, system.campus_graph)
         results = compare_algorithms(source, destination, system.campus_graph)
     except NavigationError as error:
         show(f'<div class="alert" role="alert"><b>No route could be found.</b><p>{ui.esc(error)}</p></div>')
         return
-    best = min(results, key=lambda result: (result["cost"], result["nodes_expanded"]))
-    show(ui.algo_cards(results, best["algorithm"]))
-    meta = f"{best['algorithm']} · cost {best['cost']} · {best['hops']} stops"
-    side = ('<div class="col" style="gap:10px"><h3 class="small muted">Path cost</h3>' + ui.compare_bars(results, "cost")
-            + '<h3 class="small muted" style="margin-top:6px">Stops</h3>' + ui.compare_bars(results, "hops")
-            + '<h3 class="small muted" style="margin-top:6px">Nodes expanded</h3>' + ui.compare_bars(results, "nodes_expanded", True)
-            + f'<p class="small muted" style="margin-top:6px">A* heuristic = {system.campus_graph.heuristic_scale:.3f} × '
-              'Euclidean distance (admissible).</p></div>')
-    show('<div class="row">'
-         + ui.panel(ui.campus_map(system.campus_graph, best["path"], label="Best route") + ui.map_legend(),
-                    "Best route", meta, "grow3")
-         + ui.panel(side, "Side by side", css_class="grow") + "</div>")
+
+    meta = (f"{operational['algorithm_used']} · cost {operational['cost']} · {operational['steps']} steps · "
+            f"{operational['nodes_expanded']} nodes expanded")
+    output = {key: operational[key] for key in config.SEARCH_OUTPUT_TEMPLATE}
+    side = (f'<div class="col" style="gap:10px"><p><b>Policy:</b> {ui.esc(operational["policy"])}</p>'
+            '<h3 class="small muted">Standard search output</h3>'
+            f'<pre class="code" style="white-space:pre-wrap;padding:12px;margin:0">{ui.esc(json.dumps(output, indent=2))}</pre>'
+            f'<p class="small muted">A* heuristic = {system.campus_graph.heuristic_scale:.3f} × Euclidean distance '
+            '(admissible). Unweighted → BFS, weighted with heuristic → A*, weighted without → UCS.</p></div>')
+    show('<div class="panel-head" style="margin:6px 0 0"><h2>Operational mode</h2>'
+         '<span class="muted small">One algorithm, one route - what requests use</span></div>'
+         '<div class="row">'
+         + ui.panel(ui.campus_map(system.campus_graph, operational["path"], label="Policy route") + ui.map_legend(),
+                    "Route", meta, "grow3")
+         + ui.panel(side, "Search policy", css_class="grow") + "</div>")
+
+    show('<div class="panel-head" style="margin:14px 0 0"><h2>Comparison / demo mode</h2>'
+         '<span class="muted small">All nine algorithms on the same trip: unweighted BFS, DFS, DLS, IDS, '
+         'Bidirectional BFS and weighted UCS, Greedy Best-First, A*, RBFS</span></div>')
+    show(ui.algo_cards(results, operational["algorithm_used"]))
+    bars = ('<div class="row">'
+            + ui.panel(ui.compare_bars(results, "cost"), "Path cost", css_class="grow")
+            + ui.panel(ui.compare_bars(results, "steps"), "Steps", css_class="grow")
+            + ui.panel(ui.compare_bars(results, "nodes_expanded", True), "Nodes expanded", css_class="grow")
+            + "</div>")
+    show(bars)
     file_suffix = f"{source}_{destination}"
-    route_png = saved_chart(("nav_route", source, destination),
-                            lambda: visualizer.plot_campus_graph(system.campus_graph, results[2]["path"],
-                                                                 f"A* route {source} -> {destination}",
+    route_png = saved_chart(("nav_route", source, destination, operational["algorithm_used"]),
+                            lambda: visualizer.plot_campus_graph(system.campus_graph, operational["path"],
+                                                                 f"{operational['algorithm_used']} route {source} -> {destination}",
                                                                  f"campus_route_{file_suffix}.png"))
     comparison_png = saved_chart(("nav_compare", source, destination),
                                  lambda: visualizer.plot_algorithm_comparison(results,
@@ -951,10 +1030,10 @@ def page_navigation(system):
 
     show('<div class="panel-head" style="margin:14px 0 0"><h2>How the search decides, step by step</h2>'
          '<span class="muted small">A separate graph from the final route above: each step shows which node is '
-         'expanded, why, and what happens to its neighbours</span></div>')
-    algorithm_name = st.segmented_control("Algorithm", [result["algorithm"] for result in results],
-                                          default=results[2]["algorithm"], key="steps_algo") \
-        or results[2]["algorithm"]
+         'expanded, why, and what happens to its neighbours (operational algorithms)</span></div>')
+    algorithm_name = st.segmented_control("Algorithm", OPERATIONAL_ALGORITHMS,
+                                          default=operational["algorithm_used"], key="steps_algo") \
+        or operational["algorithm_used"]
     render_search_steps(system, source, destination, algorithm_name,
                         key=f"nav_{algorithm_name}_{source}_{destination}")
 
