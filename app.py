@@ -28,7 +28,7 @@ import visualizer
 from csp_scheduler import EXAM_CONSTRAINT_EDGES, EXAM_GROUPS, EXAM_PRECEDENCE, solve_exam_schedule
 from knowledge_base import KnowledgeBaseError, format_atom, parse_atom
 from main import DEMO_REQUESTS
-from response_layer import log_response, standard_response
+from response_layer import LOG_COLUMNS, log_response, standard_response
 from router import PIPELINES, SmartCampusSystem
 from search_navigation import (OPERATIONAL_ALGORITHMS, NavigationError, compare_algorithms, find_route,
                                trace_search)
@@ -402,11 +402,20 @@ def load_results_log():
     """
     Function: load_results_log
     Purpose : Read outputs/results_log.csv with pandas (None if missing).
+              A log in an older column format is moved to
+              results_log_old.csv, the same way log_response does.
     """
     try:
-        return pd.read_csv(config.RESULTS_LOG_PATH)
+        results_log = pd.read_csv(config.RESULTS_LOG_PATH)
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
         return None
+    if list(results_log.columns) != LOG_COLUMNS:
+        try:
+            os.replace(config.RESULTS_LOG_PATH, config.RESULTS_LOG_PATH.replace(".csv", "_old.csv"))
+        except OSError:
+            pass
+        return None
+    return results_log
 
 
 def run_all_demos(system):

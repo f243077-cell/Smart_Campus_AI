@@ -20,7 +20,7 @@ Thumbs.db
 
 # Generated at runtime (rebuilt by main.py / app.py)
 outputs/models/
-outputs/results_log.csv
+outputs/results_log*.csv
 
 # Archives and generated reports
 *.zip
