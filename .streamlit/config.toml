@@ -1,0 +1,37 @@
+# Streamlit theme for the Smart Campus AI web UI.
+# Two palettes are defined; users switch with the menu (top right) ->
+# Settings -> Light / Dark / Use system setting.
+
+[theme]
+font = "sans serif"
+baseRadius = "0.6rem"
+
+# Light: white page, university blue accent
+[theme.light]
+primaryColor = "#1F4E79"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF3F8"
+textColor = "#1A1A1A"
+linkColor = "#1F4E79"
+borderColor = "#D3DCE6"
+
+[theme.light.sidebar]
+backgroundColor = "#F3F6FA"
+secondaryBackgroundColor = "#E4EBF3"
+
+# Dark: deep navy page, bright blue accent (high contrast, easy on the eyes)
+[theme.dark]
+primaryColor = "#2F81F7"
+backgroundColor = "#0E1726"
+secondaryBackgroundColor = "#1A2538"
+textColor = "#E6EDF3"
+linkColor = "#58A6FF"
+borderColor = "#2A3A52"
+codeBackgroundColor = "#16213A"
+
+[theme.dark.sidebar]
+backgroundColor = "#111C2E"
+secondaryBackgroundColor = "#1A2538"
+
+[browser]
+gatherUsageStats = false
