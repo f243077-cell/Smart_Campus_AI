@@ -34,7 +34,7 @@ from search_navigation import CampusGraph, find_route
 REPORT_DIRECTORY = os.path.dirname(config.PROJECT_DIRECTORY)
 REPORT_DOCX_PATH = os.path.join(REPORT_DIRECTORY, "Smart_Campus_AI_Report.docx")
 REPORT_PDF_PATH = os.path.join(REPORT_DIRECTORY, "Smart_Campus_AI_Report.pdf")
-SOURCE_FILES = ["main.py", "app.py", "config.py", "preprocessing.py", "router.py", "ann_module.py",
+SOURCE_FILES = ["main.py", "app.py", "ui.py", "config.py", "preprocessing.py", "router.py", "ann_module.py",
                 "knowledge_base.py", "csp_scheduler.py", "search_navigation.py",
                 "response_layer.py", "visualizer.py", "generate_report.py"]
 MAX_LINES_PER_SCREENSHOT = 58

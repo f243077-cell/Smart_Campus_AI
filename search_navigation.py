@@ -183,11 +183,14 @@ class CampusGraph:
     # ---------------------------------------------------------------
     # Search algorithms
     # ---------------------------------------------------------------
-    def breadth_first_search(self, start_node, goal_node):
+    def breadth_first_search(self, start_node, goal_node, trace=None):
         """
         Function: breadth_first_search
         Purpose : BFS on the unweighted view of the graph. Finds the route
                   with the fewest stops (edges). Goal test on generation.
+                  If a list is passed as trace, one entry per decision is
+                  appended to it (used by the UI's step-by-step view); the
+                  search itself is unchanged.
         Returns : dict with path, hops, weighted cost, expanded nodes
         """
         self._validate_endpoints(start_node, goal_node)
@@ -199,25 +202,37 @@ class CampusGraph:
         while frontier:
             current_node = frontier.popleft()
             expanded_order.append(current_node)
+            neighbour_decisions = []
             for neighbour in sorted(self.adjacency[current_node]):
                 if neighbour not in parent_map:
                     parent_map[neighbour] = current_node
                     if neighbour == goal_node:
+                        neighbour_decisions.append(self._decision(neighbour, current_node, None, "goal",
+                                                                  "goal found when generated"))
+                        self._record_step(trace, "BFS", current_node, None, neighbour_decisions,
+                                          list(frontier), parent_map, expanded_order, goal_reached=True)
                         return self._result("BFS", self._rebuild_path(parent_map, goal_node),
                                             expanded_order)
                     frontier.append(neighbour)
+                    neighbour_decisions.append(self._decision(neighbour, current_node, None, "added",
+                                                              "new node, added to the back of the queue"))
+                else:
+                    neighbour_decisions.append(self._decision(neighbour, current_node, None, "rejected",
+                                                              "already seen, ignored"))
+            self._record_step(trace, "BFS", current_node, None, neighbour_decisions,
+                              list(frontier), parent_map, expanded_order)
         raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
 
-    def uniform_cost_search(self, start_node, goal_node):
+    def uniform_cost_search(self, start_node, goal_node, trace=None):
         """
         Function: uniform_cost_search
         Purpose : UCS on the weighted graph. Always expands the frontier
                   node with the lowest path cost g(n). Optimal for positive
                   edge costs; used when no heuristic is available.
         """
-        return self._best_first_search(start_node, goal_node, use_heuristic=False)
+        return self._best_first_search(start_node, goal_node, use_heuristic=False, trace=trace)
 
-    def a_star_search(self, start_node, goal_node):
+    def a_star_search(self, start_node, goal_node, trace=None):
         """
         Function: a_star_search
         Purpose : A* on the weighted graph with f(n) = g(n) + h(n) using the
@@ -225,15 +240,15 @@ class CampusGraph:
                   automatically if the heuristic is not available.
         """
         if not self.heuristic_available():
-            return self.uniform_cost_search(start_node, goal_node)
-        return self._best_first_search(start_node, goal_node, use_heuristic=True)
+            return self.uniform_cost_search(start_node, goal_node, trace=trace)
+        return self._best_first_search(start_node, goal_node, use_heuristic=True, trace=trace)
 
-    def _best_first_search(self, start_node, goal_node, use_heuristic):
+    def _best_first_search(self, start_node, goal_node, use_heuristic, trace=None):
         """
         Function: _best_first_search
         Purpose : Shared priority-queue search used by UCS (h = 0) and A*.
                   Goal test happens when a node is POPPED, which keeps the
-                  result optimal.
+                  result optimal. trace works as in breadth_first_search.
         """
         self._validate_endpoints(start_node, goal_node)
         algorithm_name = "A*" if use_heuristic else "UCS"
@@ -244,22 +259,80 @@ class CampusGraph:
         expanded_order = []
         closed_set = set()
         while frontier:
-            _, cost_so_far, current_node = heapq.heappop(frontier)
+            priority, cost_so_far, current_node = heapq.heappop(frontier)
             if current_node in closed_set:
+                if trace is not None:
+                    trace.append({"kind": "stale", "algorithm": algorithm_name, "node": current_node,
+                                  "g": cost_so_far, "f": priority})
                 continue
             closed_set.add(current_node)
             expanded_order.append(current_node)
+            current_h = priority - cost_so_far
             if current_node == goal_node:
+                self._record_step(trace, algorithm_name, current_node, (cost_so_far, current_h, priority), [],
+                                  sorted(frontier), parent_map, expanded_order, goal_reached=True)
                 return self._result(algorithm_name, self._rebuild_path(parent_map, goal_node),
                                     expanded_order)
+            neighbour_decisions = []
             for neighbour, edge_cost in sorted(self.adjacency[current_node].items()):
                 new_cost = cost_so_far + edge_cost
-                if new_cost < best_cost.get(neighbour, math.inf):
+                h_value = self.heuristic(neighbour, goal_node) if use_heuristic else 0.0
+                values = (edge_cost, new_cost, h_value, new_cost + h_value)
+                if neighbour in closed_set:
+                    neighbour_decisions.append(self._decision(neighbour, current_node, values, "rejected",
+                                                              "already expanded (closed)"))
+                elif new_cost < best_cost.get(neighbour, math.inf):
+                    improved = neighbour in best_cost
+                    old_cost = best_cost.get(neighbour)
                     best_cost[neighbour] = new_cost
                     parent_map[neighbour] = current_node
-                    h_value = self.heuristic(neighbour, goal_node) if use_heuristic else 0.0
                     heapq.heappush(frontier, (new_cost + h_value, new_cost, neighbour))
+                    reason = (f"cheaper path found (g {old_cost:g} -> {new_cost:g}), queue updated" if improved
+                              else "new node, pushed onto the priority queue")
+                    neighbour_decisions.append(self._decision(neighbour, current_node, values,
+                                                              "improved" if improved else "added", reason))
+                else:
+                    neighbour_decisions.append(self._decision(
+                        neighbour, current_node, values, "rejected",
+                        f"not cheaper than known g {best_cost[neighbour]:g}, ignored"))
+            self._record_step(trace, algorithm_name, current_node, (cost_so_far, current_h, priority),
+                              neighbour_decisions, sorted(frontier), parent_map, expanded_order)
         raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+
+    @staticmethod
+    def _decision(neighbour, parent, values, outcome, reason):
+        """
+        Function: _decision
+        Purpose : One neighbour decision for the search trace.
+                  values = (edge_cost, g, h, f) for UCS/A*, None for BFS.
+        """
+        decision = {"node": neighbour, "from": parent, "outcome": outcome, "reason": reason}
+        if values is not None:
+            decision.update(dict(zip(("edge", "g", "h", "f"), values)))
+        return decision
+
+    @staticmethod
+    def _record_step(trace, algorithm_name, current_node, current_values, neighbour_decisions,
+                     frontier, parent_map, expanded_order, goal_reached=False):
+        """
+        Function: _record_step
+        Purpose : Append one expansion step to the trace (if tracing): the
+                  node chosen, why, what happened to each neighbour, and the
+                  frontier / parent pointers after the step.
+        """
+        if trace is None:
+            return
+        if algorithm_name == "BFS":
+            queue = [{"node": node} for node in frontier]
+        else:
+            queue = [{"node": node, "g": g_value, "h": f_value - g_value, "f": f_value}
+                     for f_value, g_value, node in frontier]
+        step = {"kind": "expand", "algorithm": algorithm_name, "node": current_node,
+                "neighbours": neighbour_decisions, "frontier": queue, "parents": dict(parent_map),
+                "expanded": list(expanded_order), "goal_reached": goal_reached}
+        if current_values is not None:
+            step.update(dict(zip(("g", "h", "f"), current_values)))
+        trace.append(step)
 
     def _result(self, algorithm_name, path, expanded_order):
         """
@@ -317,6 +390,24 @@ def find_route(source, destination, route_preference=config.DEFAULT_ROUTE_PREFER
         raise NavigationError(f"Unknown route preference '{route_preference}'. "
                               f"Use one of {config.ROUTE_PREFERENCES}.")
     return result
+
+
+def trace_search(source, destination, algorithm_name, campus_graph=None):
+    """
+    Function: trace_search
+    Purpose : Run one search algorithm and also record every decision it
+              makes (which node it expands, why, and what happens to each
+              neighbour). Used by the step-by-step view in the web UI.
+    Returns : (result dict, list of trace steps)
+    """
+    campus_graph = campus_graph or get_campus_graph()
+    searches = {"BFS": campus_graph.breadth_first_search, "UCS": campus_graph.uniform_cost_search,
+                "A*": campus_graph.a_star_search}
+    if algorithm_name not in searches:
+        raise NavigationError(f"Unknown algorithm '{algorithm_name}'. Use BFS, UCS or A*.")
+    trace = []
+    result = searches[algorithm_name](source, destination, trace=trace)
+    return result, trace
 
 
 def compare_algorithms(source, destination, campus_graph=None):
