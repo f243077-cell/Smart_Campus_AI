@@ -165,7 +165,7 @@ def pipeline_states(response):
     """
     if response["status"] == "INVALID":
         return [("Preprocessing", "error", response["explanation"][0]), ("Router", "skip", "not reached")]
-    stages = [("Preprocessing", "ok", "request validated"),
+    stages = [("Preprocessing", "ok", "request validated and normalized"),
               ("Router", "ok", " → ".join(response["pipeline"]))]
     last_module = response["modules_run"][-1] if response["modules_run"] else None
     for module in response["pipeline"]:
@@ -216,23 +216,23 @@ def render_response(system, response):
         route_body = (ui.campus_map(system.campus_graph, search["path"], line=line["var"],
                                     label=f"Route {response['route']}")
                       + f'<p class="small" style="margin-top:8px"><b>Path:</b> '
-                        f'{" → ".join(ui.nice(n) for n in search["path"])}</p>')
+                        f'{" → ".join(ui.nice(node) for node in search["path"])}</p>')
     else:
         route_meta = "this line does not stop at Search" if "Search" not in response["pipeline"] else "no route"
         route_body = (ui.campus_map(system.campus_graph, line=line["var"])
                       + f'<p class="small muted" style="margin-top:8px">No route on this request: {ui.esc(route_meta)}.</p>')
     show(f'<div class="row" style="--line:{line["var"]}">'
-         + ui.panel(ui.key_results(response), "Key results", cls="grow")
+         + ui.panel(ui.key_results(response), "Key results", css_class="grow")
          + ui.panel(route_body, "Route", route_meta, "grow3") + "</div>")
 
     show(f'<div style="--line:{line["var"]}"><div class="panel-head" style="margin:6px 0 0"><h2>At each stop</h2>'
          f'<span class="muted small">Only the modules that ran</span></div></div>')
-    ran = [m for m in ("ANN", "Logic", "CSP", "Search") if DETAIL_KEYS[m] in details]
+    ran = [module for module in ("ANN", "Logic", "CSP", "Search") if DETAIL_KEYS[module] in details]
     if not ran:
         show(ui.panel('<p class="muted">No AI module ran for this request, so there are no module details. '
                       'The explanation below lists what was wrong with the input.</p>'))
     else:
-        tabs = st.tabs([ui.STATION_NAMES[m] for m in ran])
+        tabs = st.tabs([ui.STATION_NAMES[module] for module in ran])
         for tab, module in zip(tabs, ran):
             with tab:
                 show(f'<div style="--line:{line["var"]}">{module_detail(response, module)}</div>')
@@ -262,10 +262,11 @@ def module_detail(response, module):
         csp = details["csp"]
         body = ""
         if csp["assignments"]:
-            rows = [([ui.esc(a["session"]), ui.nice(a["room"]), ui.esc(a["capacity"]), ui.esc(a["slot"]),
-                      ui.nice(a["building"])], "var(--line)") for a in csp["assignments"]]
+            rows = [([ui.esc(assignment["session"]), ui.nice(assignment["room"]), ui.esc(assignment["capacity"]),
+                      ui.esc(assignment["slot"]), ui.nice(assignment["building"])], "var(--line)")
+                    for assignment in csp["assignments"]]
             body += ui.table(["Session", "Room", "Capacity", "Slot", "Building"], rows)
-        body += "".join(f'<p class="miss" style="margin-top:8px">{ui.esc(r)}</p>' for r in csp["reasons"])
+        body += "".join(f'<p class="miss" style="margin-top:8px">{ui.esc(reason)}</p>' for reason in csp["reasons"])
         stats = csp["statistics"]
         body += (f'<p class="small muted" style="margin-top:10px">Domain size {csp["domain_size"]} · '
                  f'{stats["assignments_tried"]} values tried · {stats["backtracks"]} backtracks · '
@@ -338,16 +339,17 @@ def page_home(system):
     facts = [(len(system.campus_graph.nodes), "campus locations"), (len(system.knowledge_base.rules), "KB rules"),
              (len(config.ROOMS), "rooms"), (len(config.TIME_SLOTS), "time slots")]
     users = known_users(system)
-    note = (f"Four 90-minute slots: {', '.join(s[:5] for s in config.TIME_SLOTS)}. "
+    note = (f"Four 90-minute slots: {', '.join(slot[:5] for slot in config.TIME_SLOTS)}. "
             f"Three roles: {', '.join(config.VALID_ROLES)}. {len(users)} known users.")
     show('<div class="row">' + ui.network(PIPELINES) + ui.facts_panel(facts, note) + "</div>")
 
     if has_log:
         type_counts = results_log["request_type"].value_counts()
-        type_items = [(ui.line_of(t)["label"], int(type_counts.get(t, 0)), ui.line_of(t)["var"]) for t in ui.LINES]
+        type_items = [(ui.line_of(request_type)["label"], int(type_counts.get(request_type, 0)),
+                       ui.line_of(request_type)["var"]) for request_type in ui.LINES]
         show('<div class="row">'
-             + ui.panel(ui.status_stack(status_counts.to_dict()), "By status", cls="grow")
-             + ui.panel(ui.hbars(type_items), "By request type", cls="grow") + "</div>")
+             + ui.panel(ui.status_stack(status_counts.to_dict()), "By status", css_class="grow")
+             + ui.panel(ui.hbars(type_items), "By request type", css_class="grow") + "</div>")
         last = results_log.tail(10).iloc[::-1]
         rows = []
         for record in last.to_dict("records"):
@@ -370,7 +372,7 @@ def page_submit_request(system):
     show('<div class="panel-head" style="margin:0"><h2>Choose a line</h2>'
          '<span class="muted small">The line decides which AI modules the request stops at</span></div>')
     request_type = st.radio("Request type", config.REQUEST_TYPES, key="req_type", horizontal=True,
-                            format_func=lambda t: f"{ui.line_of(t)['label']}\n\n{' → '.join(PIPELINES[t])}")
+                            format_func=lambda request_type_name: f"{ui.line_of(request_type_name)['label']}\n\n{' → '.join(PIPELINES[request_type_name])}")
     line = ui.line_of(request_type)
 
     show('<div class="panel-head" style="margin:10px 0 0"><h2>Who is asking</h2>'
@@ -390,10 +392,10 @@ def page_submit_request(system):
         columns = st.columns(2)
         if request_type in ("Navigation_Only", "Urgent_Service_Request", "Full_Service_Request"):
             raw_request["source"] = columns[0].selectbox("Current location", locations, index=locations.index("Main_Gate"),
-                                                         format_func=lambda n: n.replace("_", " "))
+                                                         format_func=lambda location: location.replace("_", " "))
         if request_type == "Navigation_Only":
             raw_request["destination"] = columns[1].selectbox("Destination", locations, index=locations.index("AI_Lab"),
-                                                              format_func=lambda n: n.replace("_", " "))
+                                                              format_func=lambda location: location.replace("_", " "))
         if request_type == "Eligibility_Check":
             raw_request["target"] = columns[0].selectbox("Course or resource", system.eligibility_targets())
         if request_type in ("Booking_or_Scheduling", "Full_Service_Request"):
@@ -401,15 +403,15 @@ def page_submit_request(system):
             raw_request["resource_type"] = booking_columns[0].selectbox("Resource type", config.RESOURCE_TYPES)
             raw_request["group_size"] = booking_columns[1].number_input("Group size", 1, 500, 10)
             raw_request["preferred_slot"] = booking_columns[2].selectbox(
-                "Preferred time slot", [""] + config.TIME_SLOTS, format_func=lambda s: s or "Any slot")
+                "Preferred time slot", [""] + config.TIME_SLOTS, format_func=lambda slot: slot or "Any slot")
             raw_request["sessions"] = booking_columns[3].number_input("Sessions", 1, len(config.TIME_SLOTS), 1)
         if request_type in ("Navigation_Only", "Full_Service_Request"):
             raw_request["route_preference"] = st.radio(
                 "Route preference", config.ROUTE_PREFERENCES, horizontal=True,
-                format_func=lambda p: ROUTE_PREFERENCE_LABELS.get(p, p))
+                format_func=lambda preference: ROUTE_PREFERENCE_LABELS.get(preference, preference))
         if request_type == "Urgent_Service_Request":
             raw_request["service_type"] = st.radio("Service needed", list(config.SERVICE_DESTINATIONS), horizontal=True,
-                                                   format_func=lambda s: s.replace("_", " "))
+                                                   format_func=lambda service: service.replace("_", " "))
         if request_type in ("Urgent_Service_Request", "Full_Service_Request"):
             level_columns = st.columns(3)
             raw_request["severity"] = level_columns[0].slider("Severity", 1, 5, 3)
@@ -434,8 +436,9 @@ def page_demo_requests(system):
     columns = st.columns([2, 1], gap="large")
     with columns[0]:
         chosen_index = st.radio("Demo request", range(len(titles)), key="demo_pick",
-                                format_func=lambda i: f"{i + 1:02d}  ·  {DEMO_REQUESTS[i]['request'].get('user_id', '?')}\n\n"
-                                                      f"{titles[i].replace('_', ' ')}")
+                                format_func=lambda demo_index: f"{demo_index + 1:02d}  ·  "
+                                                               f"{DEMO_REQUESTS[demo_index]['request'].get('user_id', '?')}\n\n"
+                                                               f"{titles[demo_index].replace('_', ' ')}")
     demo = DEMO_REQUESTS[chosen_index]
     with columns[1]:
         show(ui.panel(f'<div class="col"><h2>{ui.esc(demo["title"])}</h2>'
@@ -513,7 +516,7 @@ def page_ann_models(system):
     with input_column:
         role = st.segmented_control("Role", config.VALID_ROLES, default="Student", key="wi_role") or "Student"
         request_type = st.selectbox("Request type", config.REQUEST_TYPES, index=3,
-                                    format_func=lambda t: ui.line_of(t)["label"])
+                                    format_func=lambda request_type_name: ui.line_of(request_type_name)["label"])
         severity = st.slider("Severity", 1, 5, 4)
         time_sensitivity = st.slider("Time sensitivity", 1, 5, 4)
         crowd_level = st.slider("Crowd level", 1, 5, 2)
@@ -562,16 +565,16 @@ def page_ann_models(system):
     if history.get("loss"):
         series = [(history["loss"], "var(--l-urg)", "Loss (scaled)")]
         top = max(history["loss"]) or 1
-        series = [([v / top for v in history["loss"]], "var(--l-urg)", "Loss (scaled)"),
+        series = [([loss / top for loss in history["loss"]], "var(--l-urg)", "Loss (scaled)"),
                   (history["train_accuracy"], "var(--brand)", "Train accuracy")]
         if history.get("test_accuracy"):
             series.append((history["test_accuracy"], "var(--accent)", "Test accuracy"))
         charts.append(ui.panel(ui.line_chart(series, "MLP loss falling and accuracy rising", 1.0),
-                               "MLP loss and accuracy", cls="grow"))
+                               "MLP loss and accuracy", css_class="grow"))
     if predictor.perceptron.errors_per_epoch:
         charts.append(ui.panel(ui.line_chart([(predictor.perceptron.errors_per_epoch, "var(--l-elig)", "Mistakes")],
                                              "Perceptron misclassifications per epoch"),
-                               "Perceptron errors per epoch", cls="grow"))
+                               "Perceptron errors per epoch", css_class="grow"))
     if charts:
         show('<div class="row">' + "".join(charts) + "</div>")
     if metrics:
@@ -580,9 +583,9 @@ def page_ann_models(system):
         dist_items = [(name, int(distribution.get(name, 0)), colours.get(name, "var(--brand)"))
                       for name in config.PRIORITY_CLASSES]
         show('<div class="row">'
-             + ui.panel(ui.confusion(metrics["perceptron_confusion"], ["No", "Yes"]), "Perceptron confusion (2×2)", cls="grow")
-             + ui.panel(ui.confusion(metrics["mlp_confusion"], config.PRIORITY_CLASSES), "MLP confusion (4×4)", cls="grow2")
-             + ui.panel(ui.hbars(dist_items, 70), "Class distribution", cls="grow") + "</div>")
+             + ui.panel(ui.confusion(metrics["perceptron_confusion"], ["No", "Yes"]), "Perceptron confusion (2×2)", css_class="grow")
+             + ui.panel(ui.confusion(metrics["mlp_confusion"], config.PRIORITY_CLASSES), "MLP confusion (4×4)", css_class="grow2")
+             + ui.panel(ui.hbars(dist_items, 70), "Class distribution", css_class="grow") + "</div>")
 
     if os.path.exists(config.ANN_DATASET_PATH):
         dataset = pd.read_csv(config.ANN_DATASET_PATH)
@@ -627,18 +630,19 @@ def page_knowledge_base(system):
             try:
                 result = knowledge_base.ask(parse_atom(st.session_state["kb_query"]))
                 ok = result["entailed"]
-                answers = [", ".join(f"{k.lstrip('?')} = {v}" for k, v in a.items()) for a in result["answers"] if a]
+                answers = [", ".join(f"{variable.lstrip('?')} = {value}" for variable, value in answer.items())
+                           for answer in result["answers"] if answer]
                 body = (f'<div class="col" aria-live="polite"><div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">'
                         f'<span class="verdict {"ok" if ok else "no"}">{"Yes" if ok else "No"}</span>'
                         f'<span style="font-weight:600">{ui.esc(result["query"])}</span></div>')
                 if answers:
                     body += '<div class="chips">' + "".join(
-                        f'<span class="ochip" style="animation-delay:{i * 0.05:.2f}s"><i>=</i>{ui.esc(a)}</span>'
-                        for i, a in enumerate(answers)) + "</div>"
+                        f'<span class="ochip" style="animation-delay:{index * 0.05:.2f}s"><i>=</i>{ui.esc(answer_text)}</span>'
+                        for index, answer_text in enumerate(answers)) + "</div>"
                 if result["proof"]:
                     body += '<h3>Proof</h3>' + ui.proof_steps(result["proof"], [])
                 if result["missing"]:
-                    body += '<h3>Why not</h3>' + "".join(f'<span class="miss">{ui.esc(m)}</span>' for m in result["missing"])
+                    body += '<h3>Why not</h3>' + "".join(f'<span class="miss">{ui.esc(reason)}</span>' for reason in result["missing"])
                 show(ui.panel(body + "</div>"))
             except KnowledgeBaseError as error:
                 show(f'<div class="alert" role="alert"><b>That query could not be read.</b><p>{ui.esc(error)}</p></div>')
@@ -665,8 +669,8 @@ def page_knowledge_base(system):
                                                      f"Rules ({len(knowledge_base.rules)})", "Forward chaining"])
         with facts_tab:
             show('<div class="scrollbox">' + "".join(
-                f'<div class="kbline" style="animation-delay:{min(i, 30) * 0.015:.3f}s"><b>{ui.esc(format_atom(f))}</b></div>'
-                for i, f in enumerate(sorted(knowledge_base.facts))) + "</div>")
+                f'<div class="kbline" style="animation-delay:{min(index, 30) * 0.015:.3f}s"><b>{ui.esc(format_atom(fact))}</b></div>'
+                for index, fact in enumerate(sorted(knowledge_base.facts))) + "</div>")
         with rules_tab:
             show('<div class="scrollbox">' + "".join(
                 f'<div class="kbline"><span class="rn">{ui.esc(rule.rule_name)}</span>'
@@ -677,10 +681,10 @@ def page_knowledge_base(system):
             derived = knowledge_base.forward_chain()
             show(f'<p class="muted small" style="margin-bottom:8px">{len(derived)} facts derived by firing every rule '
                  'until nothing new appears.</p><div class="scrollbox">' + "".join(
-                     f'<div class="kbline" style="animation-delay:{min(i, 30) * 0.015:.3f}s"><span class="rn">{ui.esc(rule_name)}</span>'
+                     f'<div class="kbline" style="animation-delay:{min(index, 30) * 0.015:.3f}s"><span class="rn">{ui.esc(rule_name)}</span>'
                      f'<span style="flex:1 1 260px"><b>{ui.esc(format_atom(fact))}</b><br><span class="muted small">from '
-                     f'{ui.esc(", ".join(format_atom(p) for p in premises))}</span></span></div>'
-                     for i, (fact, (rule_name, premises)) in enumerate(sorted(derived.items()))) + "</div>")
+                     f'{ui.esc(", ".join(format_atom(premise) for premise in premises))}</span></span></div>'
+                     for index, (fact, (rule_name, premises)) in enumerate(sorted(derived.items()))) + "</div>")
 
 
 def swap_route():
@@ -699,7 +703,7 @@ def walk_caption(result, step):
     order = result["expanded_order"]
     if step >= len(order):
         return (f"{result['algorithm']} finished after {len(order)} expansions: "
-                f"{' → '.join(n.replace('_', ' ') for n in result['path'])} (cost {result['cost']}).")
+                f"{' → '.join(node.replace('_', ' ') for node in result['path'])} (cost {result['cost']}).")
     return f"Step {step} of {len(order)}: {result['algorithm']} expands {order[step - 1].replace('_', ' ')}."
 
 
@@ -728,8 +732,8 @@ def page_navigation(system):
     st.session_state.setdefault("nav_from", "Main_Gate")
     st.session_state.setdefault("nav_to", "AI_Lab")
     columns = st.columns([2, 2, 1], vertical_alignment="bottom")
-    source = columns[0].selectbox("From", locations, key="nav_from", format_func=lambda n: n.replace("_", " "))
-    destination = columns[1].selectbox("To", locations, key="nav_to", format_func=lambda n: n.replace("_", " "))
+    source = columns[0].selectbox("From", locations, key="nav_from", format_func=lambda location: location.replace("_", " "))
+    destination = columns[1].selectbox("To", locations, key="nav_to", format_func=lambda location: location.replace("_", " "))
     columns[2].button("⇄  Swap", on_click=swap_route, width="stretch")
     if source == destination:
         show('<p class="warnbox" role="alert">From and To are the same place. '
@@ -740,7 +744,7 @@ def page_navigation(system):
     except NavigationError as error:
         show(f'<div class="alert" role="alert"><b>No route could be found.</b><p>{ui.esc(error)}</p></div>')
         return
-    best = min(results, key=lambda r: (r["cost"], r["nodes_expanded"]))
+    best = min(results, key=lambda result: (result["cost"], result["nodes_expanded"]))
     show(ui.algo_cards(results, best["algorithm"]))
     meta = f"{best['algorithm']} · cost {best['cost']} · {best['hops']} stops"
     side = ('<div class="col" style="gap:10px"><h3 class="small muted">Path cost</h3>' + ui.compare_bars(results, "cost")
@@ -751,15 +755,15 @@ def page_navigation(system):
     show('<div class="row">'
          + ui.panel(ui.campus_map(system.campus_graph, best["path"], label="Best route") + ui.map_legend(),
                     "Best route", meta, "grow3")
-         + ui.panel(side, "Side by side", cls="grow") + "</div>")
+         + ui.panel(side, "Side by side", css_class="grow") + "</div>")
 
     show('<div class="panel-head" style="margin:10px 0 0"><h2>Watch the search</h2>'
          '<span class="muted small">Step through the order each algorithm explores the campus</span></div>')
     control_columns = st.columns([2, 3, 1], vertical_alignment="bottom")
-    algorithm_name = control_columns[0].segmented_control("Algorithm", [r["algorithm"] for r in results],
+    algorithm_name = control_columns[0].segmented_control("Algorithm", [result["algorithm"] for result in results],
                                                           default=results[2]["algorithm"], key="walk_algo") \
         or results[2]["algorithm"]
-    result = next(r for r in results if r["algorithm"] == algorithm_name)
+    result = next(item for item in results if item["algorithm"] == algorithm_name)
     order = result["expanded_order"]
     step = control_columns[1].slider("Step", 1, len(order), len(order)) if len(order) > 1 else 1
     play = control_columns[2].button("▶  Play", width="stretch")
@@ -784,15 +788,15 @@ def page_csp_schedule(system):
                        (statistics["ac3_pruned"], "Pruned by AC-3"),
                        (len(exam_result["violations"]), "Constraint violations")]))
     schedule = exam_result["schedule"]
-    slot_index = {s: i for i, s in enumerate(config.TIME_SLOTS)}
-    exam_rows = [([f'<b>{ui.esc(r["Group"])}</b>', ui.esc(r["Students"]),
-                   f'<span class="lg slot" style="--sc:var(--s{slot_index[r["Slot"]]})">{ui.esc(r["Slot"])}</span>',
-                   ui.nice(r["Room"])], f'var(--s{slot_index[r["Slot"]]})') for r in schedule.to_dict("records")]
+    slot_index = {slot: index for index, slot in enumerate(config.TIME_SLOTS)}
+    exam_rows = [([f'<b>{ui.esc(exam["Group"])}</b>', ui.esc(exam["Students"]),
+                   f'<span class="lg slot" style="--sc:var(--s{slot_index[exam["Slot"]]})">{ui.esc(exam["Slot"])}</span>',
+                   ui.nice(exam["Room"])], f'var(--s{slot_index[exam["Slot"]]})') for exam in schedule.to_dict("records")]
     show('<div class="row">'
          + ui.panel(ui.constraint_graph(exam_result["solution"], EXAM_GROUPS, EXAM_CONSTRAINT_EDGES, EXAM_PRECEDENCE,
                                         CSP_NODE_POSITIONS), "Constraint graph",
                     "Each exam group is coloured by its time slot", "grow2")
-         + ui.panel(ui.table(["Group", "Students", "Slot", "Room"], exam_rows), "Exam timetable", cls="grow")
+         + ui.panel(ui.table(["Group", "Students", "Slot", "Room"], exam_rows), "Exam timetable", css_class="grow")
          + "</div>")
 
     booking_table = system.scheduler.booking_table()
@@ -805,8 +809,8 @@ def page_csp_schedule(system):
     if view == "Grid":
         show(ui.panel(ui.booking_grid(booking_table)))
     else:
-        rows = [([ui.esc(r["Slot"]), ui.nice(r["Room"]), ui.esc(r["Booked_By"])], "var(--brand)")
-                for r in booking_table.to_dict("records")]
+        rows = [([ui.esc(booking["Slot"]), ui.nice(booking["Room"]), ui.esc(booking["Booked_By"])], "var(--brand)")
+                for booking in booking_table.to_dict("records")]
         show(ui.panel(ui.table(["Slot", "Room", "Booked by"], rows, scroll=True)))
 
 
@@ -823,11 +827,11 @@ def page_history(system):
         st.button("Submit a request", type="primary", on_click=go_to, args=("Submit request",))
         return
     rows = []
-    for index, r in enumerate(history):
-        colour = ui.line_of(r["request_type"])["var"]
-        rows.append(([str(index + 1), ui.id_cell(r["request_id"], colour), ui.esc(r["user_id"]),
-                      ui.esc(ui.line_of(r["request_type"])["label"]), ui.status_pill(r["status"]),
-                      ui.priority_pill(r["priority"])], colour))
+    for index, response in enumerate(history):
+        colour = ui.line_of(response["request_type"])["var"]
+        rows.append(([str(index + 1), ui.id_cell(response["request_id"], colour), ui.esc(response["user_id"]),
+                      ui.esc(ui.line_of(response["request_type"])["label"]), ui.status_pill(response["status"]),
+                      ui.priority_pill(response["priority"])], colour))
     show(ui.panel(ui.table(["#", "Request", "User", "Line", "Status", "Priority"], rows, scroll=True)))
     labels = [history_label(index, response) for index, response in enumerate(history)]
     if st.session_state.get("history_select") not in labels:

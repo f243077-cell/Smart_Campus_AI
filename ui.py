@@ -28,6 +28,8 @@ LIGHT_TOKENS = {
     "bad-bg": "#F5DCD3", "warn-bg": "#F1E6C6", "l-nav": "#1B7A84", "l-elig": "#2E5A99", "l-book": "#6A4B9E",
     "l-urg": "#B23A2A", "l-full": "#1F4D36", "s0": "#1B7A84", "s1": "#2E5A99", "s2": "#6A4B9E", "s3": "#A8406C",
     "shadow": "0 1px 0 rgba(31,77,54,.06),0 12px 28px -18px rgba(31,77,54,.35)", "focus": "#A8406C",
+    # CSP constraint colours keep the meaning of the project's CSP diagram
+    "c-ne": "#C0392B", "c-exam": "#7B3294", "c-sup": "#C25A00", "c-prec": "#1F4E9C",
 }
 # Dark: the same forest line on a night ground (lighter line colours keep 4.5:1 contrast).
 DARK_TOKENS = {
@@ -38,6 +40,7 @@ DARK_TOKENS = {
     "bad-bg": "#3F221B", "warn-bg": "#3A321A", "l-nav": "#5BBCC5", "l-elig": "#86AAE8", "l-book": "#B9A0E6",
     "l-urg": "#F29580", "l-full": "#86C79F", "s0": "#5BBCC5", "s1": "#86AAE8", "s2": "#B9A0E6", "s3": "#E58DB0",
     "shadow": "0 1px 0 rgba(0,0,0,.25),0 12px 28px -18px rgba(0,0,0,.8)", "focus": "#E58DB0",
+    "c-ne": "#FF7B72", "c-exam": "#D2A8FF", "c-sup": "#FFA657", "c-prec": "#79C0FF",
 }
 
 # Request type -> line name and line colour variable
@@ -390,19 +393,21 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 .stat small{display:block;font-size:12.5px;color:var(--ink-2)}
 .cgraph{width:100%;height:auto;display:block}
 .cgraph .ge{stroke-width:3;fill:none}
-.cgraph .ge.students{stroke:var(--ink-2)}
-.cgraph .ge.examiner{stroke:var(--l-elig);stroke-dasharray:10 6}
-.cgraph .ge.supervisor{stroke:var(--s3);stroke-dasharray:3 5;stroke-width:4}
-.cgraph .ge.before{stroke:var(--accent);stroke-width:4}
+.cgraph .ge.students{stroke:var(--c-ne)}
+.cgraph .ge.examiner{stroke:var(--c-exam)}
+.cgraph .ge.supervisor{stroke:var(--c-sup)}
+.cgraph .ge.before{stroke:var(--c-prec);stroke-width:4}
+.cgraph .elabel{font-size:11px;font-weight:600}
+.cgraph .elabelbg{fill:var(--panel)}
 .cgraph .gn{stroke-width:3}
 .cgraph text{fill:var(--ink)}
 .cgraph text.sub{fill:var(--ink-2);font-size:11px}
 .cgraph g.node{transform-box:fill-box;transform-origin:center;animation:popsvg .45s cubic-bezier(.3,1.6,.5,1) both}
 .lg{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
-.lg::before{content:'';width:28px;height:4px;border-radius:2px;background:var(--ink-2)}
-.lg.examiner::before{background:repeating-linear-gradient(90deg,var(--l-elig) 0 8px,transparent 8px 12px)}
-.lg.supervisor::before{background:repeating-linear-gradient(90deg,var(--s3) 0 3px,transparent 3px 7px)}
-.lg.before::before{background:var(--accent)}
+.lg::before{content:'';width:28px;height:4px;border-radius:2px;background:var(--c-ne)}
+.lg.examiner::before{background:var(--c-exam)}
+.lg.supervisor::before{background:var(--c-sup)}
+.lg.before::before{background:var(--c-prec)}
 .lg.slot::before{width:14px;height:14px;border-radius:4px;background:var(--sc)}
 .bgridbox{overflow-x:auto}
 .bgrid{display:grid;grid-template-columns:minmax(150px,1.3fr) repeat(4,minmax(96px,1fr));gap:4px;min-width:640px}
@@ -466,50 +471,83 @@ def wrap(inner):
 # Small building blocks
 # -------------------------------------------------------------------
 def brand(subtitle="Request network"):
+    """
+    Function: brand
+    Purpose : Logo mark and product name at the top of the sidebar.
+    """
     return wrap(f'<div class="brand"><span class="brand-mark" aria-hidden="true"></span>'
                 f'<span><b>Smart Campus AI</b><span>{esc(subtitle)}</span></span></div>')
 
 
 def page_header(title, intro):
+    """
+    Function: page_header
+    Purpose : Page title and one-line introduction.
+    """
     return wrap(f'<header class="top"><h1>{esc(title)}</h1><p>{esc(intro)}</p></header>')
 
 
-def panel(inner, title=None, meta=None, cls="", label=None):
+def panel(inner_html, title=None, meta=None, css_class="", label=None):
+    """
+    Function: panel
+    Purpose : White card with an optional heading and a muted note on the
+              right. inner_html must already be escaped.
+    """
     head = ""
     if title or meta:
-        head = (f'<div class="panel-head"><h2>{esc(title or "")}</h2>'
-                f'{f"<span class=muted small>{esc(meta)}</span>" if meta else ""}</div>')
-        head = head.replace("<span class=muted small>", '<span class="muted small">')
-    aria = f' aria-label="{esc(label or title)}"' if (label or title) else ""
-    return f'<section class="panel {cls}"{aria}>{head}{inner}</section>'
+        meta_html = f'<span class="muted small">{esc(meta)}</span>' if meta else ""
+        head = f'<div class="panel-head"><h2>{esc(title or "")}</h2>{meta_html}</div>'
+    aria_label = f' aria-label="{esc(label or title)}"' if (label or title) else ""
+    return f'<section class="panel {css_class}"{aria_label}>{head}{inner_html}</section>'
 
 
 def status_pill(status):
+    """
+    Function: status_pill
+    Purpose : Status text with a station symbol (ok / rejected / warning).
+    """
     tone = STATUS_TONES.get(status, "warn")
     return f'<span class="pill tone-{tone}">{esc(status)}</span>'
 
 
 def priority_pill(priority):
+    """
+    Function: priority_pill
+    Purpose : Priority text with a dot whose size follows the priority.
+    """
     if not priority or priority == "-":
         return '<span class="muted">-</span>'
     return f'<span class="pill {PRIORITY_CLASS.get(priority, "p-low")}">{esc(priority)}</span>'
 
 
 def empty_state(title, text, colours=("var(--l-nav)", "var(--l-elig)", "var(--l-book)", "var(--l-full)")):
-    lines = "".join(f'<i style="top:{6 + 16 * i}px;background:{c};animation-delay:{i * 0.1:.1f}s"></i>'
-                    for i, c in enumerate(colours))
-    return panel(f'<div class="empty"><div class="art" aria-hidden="true">{lines}</div>'
+    """
+    Function: empty_state
+    Purpose : Friendly placeholder card shown before there is any data.
+    """
+    line_bars = "".join(f'<i style="top:{6 + 16 * index}px;background:{colour};animation-delay:{index * 0.1:.1f}s"></i>'
+                        for index, colour in enumerate(colours))
+    return panel(f'<div class="empty"><div class="art" aria-hidden="true">{line_bars}</div>'
                  f'<h2>{esc(title)}</h2><p>{esc(text)}</p></div>')
 
 
 def mini_line(stops, colour, show_names=True):
-    dots = "".join(f'<i style="--d:{i * 0.06:.2f}s"></i>' for i in range(len(stops)))
-    names = "".join(f"<span>{esc(s)}</span>" for s in stops)
+    """
+    Function: mini_line
+    Purpose : Small transit line with one dot per stop (and stop names).
+    """
+    dots = "".join(f'<i style="--d:{index * 0.06:.2f}s"></i>' for index in range(len(stops)))
+    names = "".join(f"<span>{esc(stop)}</span>" for stop in stops)
     return (f'<div style="--lc:{colour}"><div class="mini" aria-hidden="true">{dots}</div>'
             + (f'<div class="mini-names">{names}</div>' if show_names else "") + "</div>")
 
 
 def line_stops(request_type, pipelines):
+    """
+    Function: line_stops
+    Purpose : Stop names of a request type's line: Input, Router, its AI
+              modules in pipeline order, then Answer.
+    """
     return ["Input", "Router"] + list(pipelines.get(request_type, [])) + ["Answer"]
 
 
@@ -519,17 +557,21 @@ def table(headers, rows, scroll=False):
     Purpose : Plain HTML table. rows are (cells, line_colour) pairs; cells
               are already-escaped HTML strings.
     """
-    head = "".join(f"<th>{esc(h)}</th>" for h in headers)
+    head = "".join(f"<th>{esc(header)}</th>" for header in headers)
     body = []
     for index, (cells, colour) in enumerate(rows):
         delay = min(index, 20) * 0.03
-        tds = "".join(f"<td>{cell}</td>" for cell in cells)
-        body.append(f'<tr class="stream" style="--lc:{colour};animation-delay:{delay:.2f}s">{tds}</tr>')
+        cell_html = "".join(f"<td>{cell}</td>" for cell in cells)
+        body.append(f'<tr class="stream" style="--lc:{colour};animation-delay:{delay:.2f}s">{cell_html}</tr>')
     return (f'<div class="tablebox{" scroll" if scroll else ""}"><table><thead><tr>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
 def id_cell(text, colour):
+    """
+    Function: id_cell
+    Purpose : Request id with a station dot in its line colour.
+    """
     return f'<span class="idcell" style="--lc:{colour}"><i aria-hidden="true"></i>{esc(text)}</span>'
 
 
@@ -537,60 +579,94 @@ def id_cell(text, colour):
 # Home
 # -------------------------------------------------------------------
 def tiles(items):
-    """items: list of (number, label, tone) with tone in ok/bad/warn/brand/''."""
-    cells = "".join(f'<div class="tile {tone}" style="animation-delay:{i * 0.06:.2f}s">'
-                    f'<span class="num">{esc(n)}</span><span class="lab">{esc(label)}</span></div>'
-                    for i, (n, label, tone) in enumerate(items))
+    """
+    Function: tiles
+    Purpose : Row of big-number tiles.
+    Input   : list of (number, label, tone) with tone ok/bad/warn/brand/''
+    """
+    cells = "".join(f'<div class="tile {tone}" style="animation-delay:{index * 0.06:.2f}s">'
+                    f'<span class="num">{esc(number)}</span><span class="lab">{esc(label)}</span></div>'
+                    for index, (number, label, tone) in enumerate(items))
     return f'<div class="tiles">{cells}</div>'
 
 
 def network(pipelines):
+    """
+    Function: network
+    Purpose : The five request lines with their stops (routing table of
+              the Request Router).
+    """
     rows = []
-    for request_type, info in LINES.items():
-        rows.append(f'<div class="netline" style="--lc:{info["var"]}"><b><i aria-hidden="true"></i>{esc(info["label"])}</b>'
-                    f'{mini_line(line_stops(request_type, pipelines), info["var"])}</div>')
+    for request_type, line in LINES.items():
+        rows.append(f'<div class="netline" style="--lc:{line["var"]}"><b><i aria-hidden="true"></i>{esc(line["label"])}</b>'
+                    f'{mini_line(line_stops(request_type, pipelines), line["var"])}</div>')
     return panel("".join(rows), "The five lines", "Hover a line to trace its stops", "grow2 network")
 
 
 def facts_panel(facts, note):
-    chips = "".join(f'<span class="fact"><b>{esc(n)}</b><span class="muted small">{esc(label)}</span></span>'
-                    for n, label in facts)
+    """
+    Function: facts_panel
+    Purpose : Counts of locations, rules, rooms and slots plus a note.
+    """
+    chips = "".join(f'<span class="fact"><b>{esc(number)}</b><span class="muted small">{esc(label)}</span></span>'
+                    for number, label in facts)
     return panel(f'<div class="col"><div class="facts">{chips}</div><p class="muted small">{esc(note)}</p></div>',
-                 "On the network", cls="grow")
+                 "On the network", css_class="grow")
 
 
 def status_stack(counts):
+    """
+    Function: status_stack
+    Purpose : One stacked bar of request counts per status, with a legend.
+    """
     total = max(sum(counts.values()), 1)
-    segs, legend = [], []
-    for status, n in counts.items():
+    segments, legend = [], []
+    for status, count in counts.items():
         tone = STATUS_TONES.get(status, "warn")
-        segs.append(f'<span class="sseg tone-{tone}" style="width:{100 * n / total:.2f}%" title="{esc(status)}: {n}"></span>')
+        segments.append(f'<span class="sseg tone-{tone}" style="width:{100 * count / total:.2f}%" '
+                        f'title="{esc(status)}: {count}"></span>')
         legend.append(f'<span class="tone-{tone}"><i aria-hidden="true"></i>'
-                      f'<span style="color:var(--ink)">{esc(status)} {n}</span></span>')
-    return f'<div class="stack">{"".join(segs)}</div><div class="legend">{"".join(legend)}</div>'
+                      f'<span style="color:var(--ink)">{esc(status)} {count}</span></span>')
+    return f'<div class="stack">{"".join(segments)}</div><div class="legend">{"".join(legend)}</div>'
 
 
 def hbars(items, label_width=120):
-    """items: list of (label, value, colour)."""
-    top = max([v for _, v, _ in items] + [1])
-    rows = "".join(f'<div class="hbar" style="grid-template-columns:{label_width}px minmax(0,1fr) 40px">'
+    """
+    Function: hbars
+    Purpose : Horizontal bar chart.
+    Input   : list of (label, value, colour)
+    """
+    largest = max([value for _, value, _ in items] + [1])
+    return "".join(f'<div class="hbar" style="grid-template-columns:{label_width}px minmax(0,1fr) 40px">'
                    f'<span>{esc(label)}</span><span class="track2"><span class="fill" '
-                   f'style="width:{100 * value / top:.1f}%;background:{colour};animation-delay:{i * 0.08:.2f}s"></span></span>'
-                   f'<b style="text-align:right">{esc(value)}</b></div>'
-                   for i, (label, value, colour) in enumerate(items))
-    return rows
+                   f'style="width:{100 * value / largest:.1f}%;background:{colour};animation-delay:{index * 0.08:.2f}s">'
+                   f'</span></span><b style="text-align:right">{esc(value)}</b></div>'
+                   for index, (label, value, colour) in enumerate(items))
 
 
 # -------------------------------------------------------------------
 # Request result: the train on its line
 # -------------------------------------------------------------------
 def result_caption(response, stages):
-    status = response["status"]
-    failed = next(((m, s) for m, st, s in stages if st == "error"), None)
-    ran = sum(1 for _, st, _ in stages if st == "ok")
-    if failed:
-        return f"Stopped at {STATION_NAMES.get(failed[0], failed[0])}: {failed[1]}"
-    return f"Arrived at the final response after {ran + 1} stops: {status}."
+    """
+    Function: result_caption
+    Purpose : One sentence saying where the request stopped or arrived.
+    """
+    failed_stage = next(((module, summary) for module, state, summary in stages if state == "error"), None)
+    stations_run = sum(1 for _, state, _ in stages if state == "ok")
+    if failed_stage:
+        return f"Stopped at {STATION_NAMES.get(failed_stage[0], failed_stage[0])}: {failed_stage[1]}"
+    return f"Arrived at the final response after {stations_run + 1} stops: {response['status']}."
+
+
+def short_text(text, limit=60):
+    """
+    Function: short_text
+    Purpose : Shorten a long station note; the full text stays in the
+              caption, the tooltip and the explanation.
+    """
+    text = str(text)
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
 def result_line(response, stages):
@@ -603,26 +679,27 @@ def result_line(response, stages):
     line = line_of(response["request_type"])
     tone = STATUS_TONES.get(response["status"], "warn")
     stations = list(stages) + [("Response", "ok", "answer combined and logged")]
-    failed_index = next((i for i, (_, st, _) in enumerate(stations) if st == "error"), None)
+    failed_index = next((index for index, (_, state, _) in enumerate(stations) if state == "error"), None)
     if failed_index is not None:
-        stations = [(m, "pending" if i > failed_index else st, s if i <= failed_index else "not reached")
-                    for i, (m, st, s) in enumerate(stations)]
-    count = len(stations)
-    end_index = failed_index if failed_index is not None else count - 1
-    step = 0.45
+        stations = [(module, "pending" if index > failed_index else state,
+                     summary if index <= failed_index else "not reached")
+                    for index, (module, state, summary) in enumerate(stations)]
+    station_count = len(stations)
+    end_index = failed_index if failed_index is not None else station_count - 1
+    seconds_per_stop = 0.45
+    station_classes = {"ok": "ran", "error": "failed", "skip": "skipped", "pending": "pending"}
+    label_classes = {"ok": "", "error": "failed", "skip": "skipped", "pending": "pending"}
     parts = []
     for index, (module, state, summary) in enumerate(stations):
-        left = 100 * index / (count - 1)
-        delay = index * step
-        stn_cls = {"ok": "ran", "error": "failed", "skip": "skipped", "pending": "pending"}[state]
-        lbl_cls = {"ok": "", "error": "failed", "skip": "skipped", "pending": "pending"}[state]
-        parts.append(f'<div class="stn {stn_cls}" style="left:{left:.2f}%;animation-delay:{delay:.2f}s"></div>')
+        left = 100 * index / (station_count - 1)
+        delay = index * seconds_per_stop
+        parts.append(f'<div class="stn {station_classes[state]}" style="left:{left:.2f}%;animation-delay:{delay:.2f}s"></div>')
         if state == "error":
             parts.append(f'<div class="buffer" style="left:{left:.2f}%;animation-delay:{delay + 0.2:.2f}s"></div>')
-        parts.append(f'<div class="slabel {lbl_cls}" style="left:{left:.2f}%;animation-delay:{delay:.2f}s">'
-                     f'<b>{esc(STATION_NAMES.get(module, module))}</b><span>{esc(summary)}</span></div>')
-    end_left = 100 * end_index / (count - 1)
-    duration = max(end_index, 1) * step
+        parts.append(f'<div class="slabel {label_classes[state]}" style="left:{left:.2f}%;animation-delay:{delay:.2f}s">'
+                     f'<b>{esc(STATION_NAMES.get(module, module))}</b><span title="{esc(summary)}">{esc(short_text(summary))}</span></div>')
+    end_left = 100 * end_index / (station_count - 1)
+    duration = max(end_index, 1) * seconds_per_stop
     sign = (f'<span class="status-sign tone-{tone}" style="animation-delay:{duration:.2f}s">'
             f'<i aria-hidden="true"></i><span>{esc(response["status"])}</span></span>')
     head = (f'<div class="rhead"><div style="display:flex;flex-direction:column;gap:6px">'
@@ -639,39 +716,58 @@ def result_line(response, stages):
 
 
 def key_results(response):
-    details = response["details"]
-    search = details.get("search", {})
+    """
+    Function: key_results
+    Purpose : The four headline outputs of the Final Response Layer:
+              priority (ANN), permission (KB), assignment (CSP), route cost.
+    """
+    search = response["details"].get("search", {})
     items = [("Priority (ANN)", response["priority"]),
              ("Permission (KB)", response["authorization"]),
              ("Assignment (CSP)", response["assignment"]),
              ("Route cost", search.get("cost"))]
     cells = []
     for index, (label, value) in enumerate(items):
-        cls = "none" if value in (None, "", "-") else ("bad" if value == "DENIED" else "")
-        cells.append(f'<div class="kv {cls}" style="animation-delay:{0.1 + index * 0.08:.2f}s"><small>{esc(label)}</small>'
-                     f'<b>{esc(value if value not in (None, "") else "-")}</b></div>')
+        empty = value in (None, "", "-")
+        css_class = "none" if empty else ("bad" if value == "DENIED" else "")
+        cells.append(f'<div class="kv {css_class}" style="animation-delay:{0.1 + index * 0.08:.2f}s"><small>{esc(label)}</small>'
+                     f'<b>{"-" if empty else esc(value)}</b></div>')
     return f'<div class="keys">{"".join(cells)}</div>'
 
 
 def probability_bars(probabilities):
-    best = max(probabilities, key=lambda k: float(probabilities[k]))
+    """
+    Function: probability_bars
+    Purpose : One bar per priority class; the predicted class is highlighted.
+    """
+    best_class = max(probabilities, key=lambda name: float(probabilities[name]))
     rows = []
-    for name in config.PRIORITY_CLASSES:
-        value = float(probabilities[name])
-        rows.append(f'<div class="pbar{" top" if name == best else ""}"><span>{esc(name)}</span>'
+    for class_name in config.PRIORITY_CLASSES:
+        value = float(probabilities[class_name])
+        rows.append(f'<div class="pbar{" top" if class_name == best_class else ""}"><span>{esc(class_name)}</span>'
                     f'<span class="t"><span class="f" style="width:{100 * value:.1f}%"></span></span>'
                     f'<b style="text-align:right">{value:.0%}</b></div>')
     return "".join(rows)
 
 
 def feature_chips(features):
-    cells = "".join(f'<div class="feat" style="animation-delay:{i * 0.05:.2f}s"><span class="muted">x{i + 1} {esc(name)}</span>'
-                    f'<b>{float(v):.2f}</b><span class="t"><i style="width:{100 * min(max(float(v), 0), 1):.0f}%"></i></span></div>'
-                    for i, (name, v) in enumerate(features.items()))
+    """
+    Function: feature_chips
+    Purpose : The scaled ANN inputs x1..x7 with a small bar each.
+    """
+    cells = "".join(f'<div class="feat" style="animation-delay:{index * 0.05:.2f}s">'
+                    f'<span class="muted">x{index + 1} {esc(name)}</span><b>{float(value):.2f}</b>'
+                    f'<span class="t"><i style="width:{100 * min(max(float(value), 0), 1):.0f}%"></i></span></div>'
+                    for index, (name, value) in enumerate(features.items()))
     return f'<div class="feats">{cells}</div>'
 
 
 def proof_steps(proof, missing):
+    """
+    Function: proof_steps
+    Purpose : Backward-chaining proof as one row per step, tagged with the
+              rule used (or 'fact'), followed by any missing premises.
+    """
     parts = []
     for index, step in enumerate(proof):
         is_fact = step.endswith("is a known fact")
@@ -687,24 +783,37 @@ def proof_steps(proof, missing):
 
 
 def logic_checks(checks):
+    """
+    Function: logic_checks
+    Purpose : Each Logic/KB check of a request with its verdict and proof.
+    """
     cells = []
     for label, result in checks:
-        ok = result["entailed"]
-        cells.append(f'<div class="check {"ok" if ok else "no"}"><div class="ch"><span>{esc(label)}: '
+        proved = result["entailed"]
+        cells.append(f'<div class="check {"ok" if proved else "no"}"><div class="ch"><span>{esc(label)}: '
                      f'<span class="code">{esc(result["query"])}</span></span>'
-                     f'<span class="v">{"Proved" if ok else "Not proved"}</span></div>'
+                     f'<span class="v">{"Proved" if proved else "Not proved"}</span></div>'
                      f'{proof_steps(result["proof"], result["missing"])}</div>')
     return "".join(cells)
 
 
 def order_chips(order, current=None):
+    """
+    Function: order_chips
+    Purpose : Numbered chips for the order a search expanded nodes.
+    """
     return '<div class="chips">' + "".join(
-        f'<span class="ochip{" cur" if name == current else ""}" style="animation-delay:{min(i, 20) * 0.03:.2f}s">'
-        f'<i>{i + 1}</i>{nice(name)}</span>' for i, name in enumerate(order)) + "</div>"
+        f'<span class="ochip{" cur" if name == current else ""}" style="animation-delay:{min(index, 20) * 0.03:.2f}s">'
+        f'<i>{index + 1}</i>{nice(name)}</span>' for index, name in enumerate(order)) + "</div>"
 
 
 def explanation(sentences):
-    items = "".join(f'<li style="animation-delay:{i * 0.07:.2f}s">{esc(s)}</li>' for i, s in enumerate(sentences))
+    """
+    Function: explanation
+    Purpose : Numbered explanation from the Final Response Layer.
+    """
+    items = "".join(f'<li style="animation-delay:{index * 0.07:.2f}s">{esc(sentence)}</li>'
+                    for index, sentence in enumerate(sentences))
     return panel(f'<ol class="expl">{items}</ol>', "Explanation")
 
 
@@ -717,25 +826,35 @@ MAP_LABELS = {"Bus_Stop": (-16, 5, "end"), "Main_Gate": (-16, 5, "end"), "Librar
               "Student_Services": (12, 24, "start"), "Medical_Center": (0, 28, "middle")}
 
 
-def _map_xy(x, y):
-    return 90 + x * 60, 318 - y * 52
+def _map_xy(x_value, y_value):
+    """
+    Function: _map_xy
+    Purpose : Campus coordinates (from the project's campus graph) to SVG
+              pixels; y grows upward on the campus and downward in SVG.
+    """
+    return 90 + x_value * 60, 318 - y_value * 52
 
 
-def _edge_path(a, b, others):
-    """Straight edge unless another building sits on it; then bend it upward."""
-    (x1, y1), (x2, y2) = a, b
+def _edge_path(start, end, other_points):
+    """
+    Function: _edge_path
+    Purpose : SVG path of one edge: straight unless another building sits
+              on it (e.g. Admin_Block - Exam_Hall), then bent upward.
+    Returns : (path_text, label_point)
+    """
+    (x1, y1), (x2, y2) = start, end
     dx, dy = x2 - x1, y2 - y1
     length = math.hypot(dx, dy) or 1
-    for (px, py) in others:
-        along = ((px - x1) * dx + (py - y1) * dy) / length ** 2
-        off = abs(dx * (py - y1) - dy * (px - x1)) / length
-        if 0.05 < along < 0.95 and off < 12:
-            nx, ny = -dy / length, dx / length
-            if ny > 0:
-                nx, ny = -nx, -ny
-            cx, cy = (x1 + x2) / 2 + nx * 34, (y1 + y2) / 2 + ny * 34
-            mid = (0.25 * x1 + 0.5 * cx + 0.25 * x2, 0.25 * y1 + 0.5 * cy + 0.25 * y2)
-            return f"M{x1:.1f},{y1:.1f} Q{cx:.1f},{cy:.1f} {x2:.1f},{y2:.1f}", mid
+    for (point_x, point_y) in other_points:
+        along = ((point_x - x1) * dx + (point_y - y1) * dy) / length ** 2
+        distance_to_line = abs(dx * (point_y - y1) - dy * (point_x - x1)) / length
+        if 0.05 < along < 0.95 and distance_to_line < 12:
+            normal_x, normal_y = -dy / length, dx / length
+            if normal_y > 0:
+                normal_x, normal_y = -normal_x, -normal_y
+            control_x, control_y = (x1 + x2) / 2 + normal_x * 34, (y1 + y2) / 2 + normal_y * 34
+            middle = (0.25 * x1 + 0.5 * control_x + 0.25 * x2, 0.25 * y1 + 0.5 * control_y + 0.25 * y2)
+            return f"M{x1:.1f},{y1:.1f} Q{control_x:.1f},{control_y:.1f} {x2:.1f},{y2:.1f}", middle
     return f"M{x1:.1f},{y1:.1f} L{x2:.1f},{y2:.1f}", ((x1 + x2) / 2, (y1 + y2) / 2)
 
 
@@ -748,51 +867,58 @@ def campus_map(campus_graph, path=None, expanded=None, current=None, line="var(-
     """
     path = path or []
     expanded = list(expanded or [])
-    points = {n: _map_xy(*xy) for n, xy in campus_graph.coordinates.items()}
-    on_route = {frozenset(p): i for i, p in enumerate(zip(path[:-1], path[1:]))}
-    base, segs, weights = [], [], []
-    for a, b, cost in campus_graph.edges:
-        d, mid = _edge_path(points[a], points[b], [p for n, p in points.items() if n not in (a, b)])
-        base.append(f'<path class="medge" d="{d}"/>')
-        weights.append(f'<rect class="mwbg" x="{mid[0] - 9:.1f}" y="{mid[1] - 8:.1f}" width="18" height="15" rx="4"/>'
-                       f'<text class="mw" x="{mid[0]:.1f}" y="{mid[1] + 4:.1f}" text-anchor="middle">{cost}</text>')
-        key = frozenset((a, b))
-        if key in on_route:
-            index = on_route[key]
-            # draw in travel direction
-            forward = path[index] == a
-            d2 = d if forward else _edge_path(points[b], points[a], [p for n, p in points.items() if n not in (a, b)])[0]
-            segs.append((index, f'<path class="mseg" pathLength="1" d="{d2}" style="animation-delay:{0.15 + index * 0.3:.2f}s"/>'))
-    segs = [s for _, s in sorted(segs)]
+    points = {name: _map_xy(*xy) for name, xy in campus_graph.coordinates.items()}
+    route_index = {frozenset(pair): index for index, pair in enumerate(zip(path[:-1], path[1:]))}
+    base_edges, route_segments, weights = [], [], []
+    for node_a, node_b, cost in campus_graph.edges:
+        others = [point for name, point in points.items() if name not in (node_a, node_b)]
+        path_text, middle = _edge_path(points[node_a], points[node_b], others)
+        base_edges.append(f'<path class="medge" d="{path_text}"/>')
+        weights.append(f'<rect class="mwbg" x="{middle[0] - 9:.1f}" y="{middle[1] - 8:.1f}" width="18" height="15" rx="4"/>'
+                       f'<text class="mw" x="{middle[0]:.1f}" y="{middle[1] + 4:.1f}" text-anchor="middle">{cost}</text>')
+        edge_key = frozenset((node_a, node_b))
+        if edge_key in route_index:
+            index = route_index[edge_key]
+            if path[index] != node_a:            # draw the segment in travel direction
+                path_text = _edge_path(points[node_b], points[node_a], others)[0]
+            route_segments.append((index, f'<path class="mseg" pathLength="1" d="{path_text}" '
+                                          f'style="animation-delay:{0.15 + index * 0.3:.2f}s"/>'))
+    route_segments = [segment for _, segment in sorted(route_segments)]
     nodes, labels = [], []
-    order_index = {n: i for i, n in enumerate(expanded)}
-    for name, (x, y) in points.items():
-        cls = "mnode"
-        radius = 9
+    order_index = {name: index for index, name in enumerate(expanded)}
+    for name, (x_value, y_value) in points.items():
+        css_class, radius = "mnode", 9
         if name in path:
-            cls += " onpath"
+            css_class += " onpath"
         elif name in order_index:
-            cls += " ex"
+            css_class += " ex"
         if path and name in (path[0], path[-1]):
-            cls += " end"
+            css_class += " end"
             radius = 12
         if name == current:
-            cls += " cur"
-        delay = order_index.get(name, 0) * 0.04 if name in order_index else 0
-        nodes.append(f'<circle class="{cls} pop" cx="{x:.1f}" cy="{y:.1f}" r="{radius}" style="animation-delay:{delay:.2f}s"/>')
+            css_class += " cur"
+        delay = order_index[name] * 0.04 if name in order_index else 0
+        nodes.append(f'<circle class="{css_class} pop" cx="{x_value:.1f}" cy="{y_value:.1f}" r="{radius}" '
+                     f'style="animation-delay:{delay:.2f}s"><title>{nice(name)}</title></circle>')
         if name == current:
-            nodes.append(f'<circle class="ring" cx="{x:.1f}" cy="{y:.1f}" r="{radius}"/>')
+            nodes.append(f'<circle class="ring" cx="{x_value:.1f}" cy="{y_value:.1f}" r="{radius}"/>')
         if name in order_index:
-            n = order_index[name] + 1
-            nodes.append(f'<g class="pop" style="animation-delay:{delay:.2f}s"><circle class="mord" cx="{x + 13:.1f}" cy="{y - 13:.1f}" r="9"/>'
-                         f'<text class="mordt" x="{x + 13:.1f}" y="{y - 9.5:.1f}" text-anchor="middle">{n}</text></g>')
-        dx, dy, anchor = MAP_LABELS.get(name, (0, -18 if y < 90 else 26, "middle"))
-        labels.append(f'<text class="mlabel" x="{x + dx:.1f}" y="{y + dy:.1f}" text-anchor="{anchor}">{nice(name)}</text>')
+            nodes.append(f'<g class="pop" style="animation-delay:{delay:.2f}s">'
+                         f'<circle class="mord" cx="{x_value + 13:.1f}" cy="{y_value - 13:.1f}" r="9"/>'
+                         f'<text class="mordt" x="{x_value + 13:.1f}" y="{y_value - 9.5:.1f}" text-anchor="middle">'
+                         f'{order_index[name] + 1}</text></g>')
+        offset_x, offset_y, anchor = MAP_LABELS.get(name, (0, -18 if y_value < 90 else 26, "middle"))
+        labels.append(f'<text class="mlabel" x="{x_value + offset_x:.1f}" y="{y_value + offset_y:.1f}" '
+                      f'text-anchor="{anchor}">{nice(name)}</text>')
     return (f'<svg class="map" viewBox="0 0 {MAP_W} {MAP_H}" role="img" aria-label="{esc(label)}" style="--line:{line}">'
-            f'{"".join(base)}{"".join(segs)}{"".join(weights)}{"".join(nodes)}{"".join(labels)}</svg>')
+            f'{"".join(base_edges)}{"".join(route_segments)}{"".join(weights)}{"".join(nodes)}{"".join(labels)}</svg>')
 
 
 def map_legend(walk=False, line="var(--brand)"):
+    """
+    Function: map_legend
+    Purpose : Legend under a campus map (route map or search walkthrough).
+    """
     if walk:
         return (f'<div class="maplegend" style="--line:{line}"><span><i class="ex"></i>Explored, numbered in order</span>'
                 '<span><i class="cur"></i>Expanding now</span><span><i class="p"></i>Final path</span></div>')
@@ -806,80 +932,97 @@ def map_legend(walk=False, line="var(--brand)"):
 def nn_diagram(mlp, feature_vector, input_names, output_names):
     """
     Function: nn_diagram
-    Purpose : The 7-4-3-4 MLP with the activations of one input. Edge colour
-              is the weight's sign, thickness its strength; the predicted
-              priority node rings.
+    Purpose : The 7-4-3-4 MLP (inputs x1..x7 in the fixed order of the
+              project diagram) with the activations of one input. Edge
+              colour is the weight's sign, thickness its strength; the
+              predicted priority node rings.
     """
     activations = mlp.forward(np.asarray(feature_vector, dtype=float).reshape(1, -1))
-    sizes = [len(a[0]) for a in activations]
+    layer_sizes = [len(layer[0]) for layer in activations]
     width, height = 720, 320
-    xs = np.linspace(150, width - 90, len(sizes))
+    layer_x = np.linspace(170, width - 90, len(layer_sizes))
     positions = []
-    for layer, size in enumerate(sizes):
-        ys = np.linspace(30, height - 30, size) if size > 1 else [height / 2]
-        positions.append([(xs[layer], y) for y in ys])
+    for layer, size in enumerate(layer_sizes):
+        layer_y = np.linspace(30, height - 30, size) if size > 1 else [height / 2]
+        positions.append([(layer_x[layer], y_value) for y_value in layer_y])
     edges = []
-    for layer, weight in enumerate(mlp.weights):
-        strongest = float(np.abs(weight).max()) or 1.0
-        for i, (x1, y1) in enumerate(positions[layer]):
-            for j, (x2, y2) in enumerate(positions[layer + 1]):
-                w = float(weight[i, j])
-                strength = abs(w) / strongest
-                edges.append(f'<line class="e {"pos" if w >= 0 else "neg"}" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" '
-                             f'y2="{y2:.1f}" stroke-width="{0.6 + 3.4 * strength:.2f}" stroke-opacity="{0.15 + 0.6 * strength:.2f}" '
-                             f'style="animation-delay:{layer * 0.15:.2f}s"/>')
+    for layer, weight_matrix in enumerate(mlp.weights):
+        strongest = float(np.abs(weight_matrix).max()) or 1.0
+        for source, (x1, y1) in enumerate(positions[layer]):
+            for target, (x2, y2) in enumerate(positions[layer + 1]):
+                weight = float(weight_matrix[source, target])
+                strength = abs(weight) / strongest
+                edges.append(f'<line class="e {"pos" if weight >= 0 else "neg"}" x1="{x1:.1f}" y1="{y1:.1f}" '
+                             f'x2="{x2:.1f}" y2="{y2:.1f}" stroke-width="{0.6 + 3.4 * strength:.2f}" '
+                             f'stroke-opacity="{0.15 + 0.6 * strength:.2f}" style="animation-delay:{layer * 0.15:.2f}s"/>')
     winner = int(np.argmax(activations[-1][0]))
     nodes = []
     for layer, layer_positions in enumerate(positions):
         values = activations[layer][0]
-        for i, (x, y) in enumerate(layer_positions):
-            value = float(values[i])
+        for index, (x_value, y_value) in enumerate(layer_positions):
+            value = float(values[index])
             amount = min(abs(value), 1.0)
-            win = layer == len(positions) - 1 and i == winner
-            nodes.append(f'<circle class="n{" win" if win else ""}" cx="{x:.1f}" cy="{y:.1f}" r="16" '
+            is_winner = layer == len(positions) - 1 and index == winner
+            text_colour = "var(--brand-ink)" if amount > 0.55 else "var(--ink)"
+            nodes.append(f'<circle class="n{" win" if is_winner else ""}" cx="{x_value:.1f}" cy="{y_value:.1f}" r="16" '
                          f'style="fill:color-mix(in srgb,var(--brand) {amount * 100:.0f}%,var(--panel))"/>'
-                         f'<text class="v" x="{x:.1f}" y="{y + 3.5:.1f}" text-anchor="middle" '
-                         f'style="fill:{"var(--brand-ink)" if amount > 0.55 else "var(--ink)"}">{value:.2f}</text>')
+                         f'<text class="v" x="{x_value:.1f}" y="{y_value + 3.5:.1f}" text-anchor="middle" '
+                         f'style="fill:{text_colour}">{value:.2f}</text>')
             if layer == 0:
-                nodes.append(f'<text x="{x - 24:.1f}" y="{y + 4:.1f}" text-anchor="end">{esc(input_names[i])}</text>')
+                nodes.append(f'<text x="{x_value - 24:.1f}" y="{y_value + 4:.1f}" text-anchor="end">'
+                             f'x{index + 1} {esc(input_names[index])}</text>')
             if layer == len(positions) - 1:
-                nodes.append(f'<text x="{x + 24:.1f}" y="{y + 4:.1f}" style="{"fill:var(--accent)" if win else ""}">'
-                             f'{esc(output_names[i])}</text>')
+                nodes.append(f'<text x="{x_value + 24:.1f}" y="{y_value + 4:.1f}" '
+                             f'style="{"fill:var(--accent)" if is_winner else ""}">{esc(output_names[index])}</text>')
     return (f'<svg class="nn" viewBox="0 0 {width} {height}" role="img" '
             f'aria-label="Neural network 7-4-3-4 with current activations; predicted {esc(output_names[winner])}">'
             f'{"".join(edges)}{"".join(nodes)}</svg>')
 
 
 def line_chart(series, label, y_max=None):
-    """series: list of (values, colour, name)."""
+    """
+    Function: line_chart
+    Purpose : Small SVG line chart over epochs.
+    Input   : series = list of (values, colour, name)
+    """
     width, height = 300, 110
-    longest = max((len(v) for v, _, _ in series), default=1)
-    top = y_max if y_max is not None else max((max(v) for v, _, _ in series if len(v)), default=1) or 1
-    grid = "".join(f'<line class="grid" x1="0" y1="{y}" x2="{width}" y2="{y}"/>' for y in (0, height / 2, height))
+    longest = max((len(values) for values, _, _ in series), default=1)
+    top_value = y_max if y_max is not None else (max((max(values) for values, _, _ in series if len(values)),
+                                                     default=1) or 1)
+    grid = "".join(f'<line class="grid" x1="0" y1="{y_value}" x2="{width}" y2="{y_value}"/>'
+                   for y_value in (0, height / 2, height))
     lines, legend = [], []
     for values, colour, name in series:
         if len(values) < 2:
             continue
-        pts = " ".join(f"{width * i / (longest - 1):.1f},{height - height * min(v / top, 1):.1f}"
-                       for i, v in enumerate(values))
-        lines.append(f'<polyline class="ln" pathLength="1" points="{pts}" style="stroke:{colour}"/>')
-        legend.append(f'<span style="color:{colour}"><i aria-hidden="true"></i><span style="color:var(--ink)">{esc(name)}</span></span>')
-    axis = (f'<text x="0" y="{height + 12}">1</text><text x="{width}" y="{height + 12}" text-anchor="end">{longest} epochs</text>'
-            f'<text x="-2" y="-1" text-anchor="start">{top:g}</text>')
+        points = " ".join(f"{width * index / (longest - 1):.1f},{height - height * min(value / top_value, 1):.1f}"
+                          for index, value in enumerate(values))
+        lines.append(f'<polyline class="ln" pathLength="1" points="{points}" style="stroke:{colour}"/>')
+        legend.append(f'<span style="color:{colour}"><i aria-hidden="true"></i>'
+                      f'<span style="color:var(--ink)">{esc(name)}</span></span>')
+    axis = (f'<text x="0" y="{height + 12}">1</text><text x="{width}" y="{height + 12}" text-anchor="end">'
+            f'{longest} epochs</text><text x="-2" y="-1" text-anchor="start">{top_value:g}</text>')
     return (f'<svg class="chart" viewBox="-4 -8 308 132" role="img" aria-label="{esc(label)}">{grid}{"".join(lines)}{axis}</svg>'
             f'<div class="legend">{"".join(legend)}</div>')
 
 
 def confusion(matrix, labels):
+    """
+    Function: confusion
+    Purpose : Confusion matrix as a shaded grid (rows actual, columns
+              predicted); correct predictions on the diagonal are outlined.
+    """
     matrix = np.asarray(matrix)
-    top = matrix.max() or 1
-    cells = ["<span></span>"] + [f'<span class="cmlab" style="justify-content:center">Pred {esc(l)}</span>' for l in labels]
-    for r, row_label in enumerate(labels):
+    largest = matrix.max() or 1
+    cells = ["<span></span>"] + [f'<span class="cmlab" style="justify-content:center">Pred {esc(name)}</span>'
+                                 for name in labels]
+    for row, row_label in enumerate(labels):
         cells.append(f'<span class="cmlab">{esc(row_label)}</span>')
-        for c in range(len(labels)):
-            amount = matrix[r, c] / top
-            cells.append(f'<span class="cmcell{" diag" if r == c else ""}{" hi" if amount > 0.55 else ""}" '
-                         f'style="--a:{amount:.3f};animation-delay:{(r * len(labels) + c) * 0.03:.2f}s">{matrix[r, c]}</span>')
+        for column in range(len(labels)):
+            amount = matrix[row, column] / largest
+            cells.append(f'<span class="cmcell{" diag" if row == column else ""}{" hi" if amount > 0.55 else ""}" '
+                         f'style="--a:{amount:.3f};animation-delay:{(row * len(labels) + column) * 0.03:.2f}s">'
+                         f'{matrix[row, column]}</span>')
     return (f'<div class="cm" style="grid-template-columns:76px repeat({len(labels)},minmax(0,1fr))">'
             f'{"".join(cells)}</div>')
 
@@ -888,103 +1031,153 @@ def confusion(matrix, labels):
 # Navigation comparison
 # -------------------------------------------------------------------
 def algo_cards(results, best_name):
+    """
+    Function: algo_cards
+    Purpose : One card per search algorithm with cost, stops, nodes
+              expanded and the path found.
+    """
     cards = []
-    for index, r in enumerate(results):
-        best = r["algorithm"] == best_name
-        cards.append(f'<div class="algocard grow{" best" if best else ""}" style="animation-delay:{index * 0.08:.2f}s;flex-basis:220px">'
-                     f'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3>{esc(r["algorithm"])}</h3>'
-                     f'{"<span class=bestflag>Best route</span>" if best else ""}</div>'
-                     f'<div class="nums"><div><b>{esc(r["cost"])}</b><span>cost</span></div>'
-                     f'<div><b>{r["hops"]}</b><span>stops</span></div><div><b>{r["nodes_expanded"]}</b><span>expanded</span></div></div>'
-                     f'<p class="small muted">{" → ".join(nice(n) for n in r["path"])}</p></div>')
-    return '<div class="row">' + "".join(cards).replace("class=bestflag", 'class="bestflag"') + "</div>"
+    for index, result in enumerate(results):
+        is_best = result["algorithm"] == best_name
+        flag = '<span class="bestflag">Best route</span>' if is_best else ""
+        cards.append(f'<div class="algocard grow{" best" if is_best else ""}" '
+                     f'style="animation-delay:{index * 0.08:.2f}s;flex-basis:220px">'
+                     f'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+                     f'<h3>{esc(result["algorithm"])}</h3>{flag}</div>'
+                     f'<div class="nums"><div><b>{esc(result["cost"])}</b><span>cost</span></div>'
+                     f'<div><b>{result["hops"]}</b><span>stops</span></div>'
+                     f'<div><b>{result["nodes_expanded"]}</b><span>expanded</span></div></div>'
+                     f'<p class="small muted">{" → ".join(nice(node) for node in result["path"])}</p></div>')
+    return '<div class="row">' + "".join(cards) + "</div>"
 
 
 def compare_bars(results, key, accent=False):
-    top = max([r[key] for r in results] + [1])
-    return "".join(f'<div class="cmp"><span>{esc(r["algorithm"])}</span><span class="t"><i class="{"c" if accent else ""}" '
-                   f'style="width:{100 * r[key] / top:.1f}%;animation-delay:{i * 0.08:.2f}s"></i></span>'
-                   f'<b style="text-align:right">{esc(r[key])}</b></div>' for i, r in enumerate(results))
+    """
+    Function: compare_bars
+    Purpose : Bars comparing one measure (cost, stops, expanded) per algorithm.
+    """
+    largest = max([result[key] for result in results] + [1])
+    return "".join(f'<div class="cmp"><span>{esc(result["algorithm"])}</span><span class="t"><i class="{"c" if accent else ""}" '
+                   f'style="width:{100 * result[key] / largest:.1f}%;animation-delay:{index * 0.08:.2f}s"></i></span>'
+                   f'<b style="text-align:right">{esc(result[key])}</b></div>' for index, result in enumerate(results))
 
 
 # -------------------------------------------------------------------
 # CSP
 # -------------------------------------------------------------------
 def stats_row(items):
+    """
+    Function: stats_row
+    Purpose : Row of solver statistics.
+    Input   : list of (number, label)
+    """
     return '<div class="tiles">' + "".join(
-        f'<div class="stat" style="animation-delay:{i * 0.06:.2f}s"><b>{esc(n)}</b><small>{esc(label)}</small></div>'
-        for i, (n, label) in enumerate(items)) + "</div>"
+        f'<div class="stat" style="animation-delay:{index * 0.06:.2f}s"><b>{esc(number)}</b><small>{esc(label)}</small></div>'
+        for index, (number, label) in enumerate(items)) + "</div>"
 
 
 def constraint_graph(solution, groups, edges, precedence, positions):
     """
     Function: constraint_graph
-    Purpose : The G1-G6 exam constraint graph; each group is coloured by
-              its assigned time slot.
+    Purpose : The G1-G6 exam constraint graph in the layout and colours of
+              the project's CSP diagram (red != shared students, purple
+              examiner clash, orange supervisor clash, blue precedence
+              arrow). Each group's box is tinted by its assigned time slot.
     """
     width, height = 720, 380
-    xs = [p[0] for p in positions.values()]
-    ys = [p[1] for p in positions.values()]
+    all_x = [point[0] for point in positions.values()]
+    all_y = [point[1] for point in positions.values()]
 
-    def xy(group):
-        x, y = positions[group]
-        return (90 + (x - min(xs)) / ((max(xs) - min(xs)) or 1) * (width - 180),
-                height - 60 - (y - min(ys)) / ((max(ys) - min(ys)) or 1) * (height - 120))
+    def to_pixels(group):
+        """
+        Function: to_pixels
+        Purpose : Diagram position of a group (inches) to SVG pixels.
+        """
+        x_value, y_value = positions[group]
+        return (90 + (x_value - min(all_x)) / ((max(all_x) - min(all_x)) or 1) * (width - 180),
+                height - 60 - (y_value - min(all_y)) / ((max(all_y) - min(all_y)) or 1) * (height - 120))
 
-    lines = []
-    for a, b, label in edges:
-        kind = "examiner" if "examiner" in label else "supervisor" if "supervisor" in label else "students"
-        (x1, y1), (x2, y2) = xy(a), xy(b)
-        lines.append(f'<line class="ge {kind}" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}"><title>{esc(a)}–{esc(b)}: {esc(label)}</title></line>')
-    for a, b, label in precedence:
-        (x1, y1), (x2, y2) = xy(a), xy(b)
-        # stop the arrow at the box edge
+    def edge_label(x1, y1, x2, y2, text, colour_var):
+        """
+        Function: edge_label
+        Purpose : Constraint label at the middle of an edge.
+        """
+        middle_x, middle_y = (x1 + x2) / 2, (y1 + y2) / 2
+        box_width = 7 * len(text) + 10
+        return (f'<rect class="elabelbg" x="{middle_x - box_width / 2:.1f}" y="{middle_y - 9:.1f}" '
+                f'width="{box_width}" height="16" rx="5"/><text class="elabel" x="{middle_x:.1f}" '
+                f'y="{middle_y + 3.5:.1f}" text-anchor="middle" style="fill:var({colour_var})">{esc(text)}</text>')
+
+    lines, labels = [], []
+    for group_a, group_b, constraint in edges:
+        if "examiner" in constraint:
+            kind, colour_var, short_text = "examiner", "--c-exam", "!= examiner clash"
+        elif "supervisor" in constraint:
+            kind, colour_var, short_text = "supervisor", "--c-sup", "!= supervisor clash"
+        else:
+            kind, colour_var, short_text = "students", "--c-ne", "!="
+        (x1, y1), (x2, y2) = to_pixels(group_a), to_pixels(group_b)
+        lines.append(f'<line class="ge {kind}" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}">'
+                     f'<title>{esc(group_a)}–{esc(group_b)}: {esc(constraint)}</title></line>')
+        labels.append(edge_label(x1, y1, x2, y2, short_text, colour_var))
+    for group_a, group_b, constraint in precedence:
+        (x1, y1), (x2, y2) = to_pixels(group_a), to_pixels(group_b)
         dx, dy = x2 - x1, y2 - y1
         length = math.hypot(dx, dy) or 1
-        x2b, y2b = x2 - dx / length * 66, y2 - dy / length * 40
-        lines.append(f'<line class="ge before" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2b:.1f}" y2="{y2b:.1f}" marker-end="url(#arrowhead)">'
-                     f'<title>{esc(a)} before {esc(b)}</title></line>')
+        arrow_x, arrow_y = x2 - dx / length * 66, y2 - dy / length * 40      # stop at the box edge
+        lines.append(f'<line class="ge before" x1="{x1:.1f}" y1="{y1:.1f}" x2="{arrow_x:.1f}" y2="{arrow_y:.1f}" '
+                     f'marker-end="url(#arrowhead)"><title>{esc(group_a)} before {esc(group_b)}</title></line>')
+        labels.append(edge_label(x1, y1, x2, y2, constraint, "--c-prec"))
     nodes = []
     for index, (group, (slot, room)) in enumerate(sorted(solution.items())):
-        x, y = xy(group)
+        x_value, y_value = to_pixels(group)
         slot_index = config.TIME_SLOTS.index(slot)
         nodes.append(f'<g class="node" style="animation-delay:{index * 0.08:.2f}s">'
-                     f'<rect class="gn" x="{x - 62:.1f}" y="{y - 38:.1f}" width="124" height="76" rx="16" '
+                     f'<rect class="gn" x="{x_value - 62:.1f}" y="{y_value - 38:.1f}" width="124" height="76" rx="16" '
                      f'style="stroke:var(--s{slot_index});fill:color-mix(in srgb,var(--s{slot_index}) 14%,var(--panel))"/>'
-                     f'<text x="{x:.1f}" y="{y - 14:.1f}" text-anchor="middle" style="font-weight:700;font-size:15px">{esc(group)}</text>'
-                     f'<text class="sub" x="{x:.1f}" y="{y + 3:.1f}" text-anchor="middle">{groups[group]} students · {esc(slot[:5])}</text>'
-                     f'<text class="sub" x="{x:.1f}" y="{y + 19:.1f}" text-anchor="middle">{nice(room)}</text></g>')
-    defs = ('<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">'
-            '<path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker></defs>')
-    legend = ('<div class="legend" style="gap:8px 18px"><span class="lg">Shared students</span><span class="lg examiner">Same examiner</span>'
-              '<span class="lg supervisor">Same supervisor</span><span class="lg before">Must come before</span>'
-              + "".join(f'<span class="lg slot" style="--sc:var(--s{i})">{esc(s)}</span>' for i, s in enumerate(config.TIME_SLOTS))
-              + "</div>")
-    return (f'<svg class="cgraph" viewBox="0 0 {width} {height}" role="img" aria-label="Exam constraint graph">{defs}'
-            f'{"".join(lines)}{"".join(nodes)}</svg>{legend}')
+                     f'<text x="{x_value:.1f}" y="{y_value - 14:.1f}" text-anchor="middle" style="font-weight:700;font-size:15px">'
+                     f'{esc(group)}</text><text class="sub" x="{x_value:.1f}" y="{y_value + 3:.1f}" text-anchor="middle">'
+                     f'{groups[group]} students · {esc(slot[:5])}</text>'
+                     f'<text class="sub" x="{x_value:.1f}" y="{y_value + 19:.1f}" text-anchor="middle">{nice(room)}</text></g>')
+    definitions = ('<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" '
+                   'orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--c-prec)"/></marker></defs>')
+    legend = ('<div class="legend" style="gap:8px 18px"><span class="lg">!= shared students</span>'
+              '<span class="lg examiner">!= examiner clash</span><span class="lg supervisor">!= supervisor clash</span>'
+              '<span class="lg before">&lt; precedence</span>'
+              + "".join(f'<span class="lg slot" style="--sc:var(--s{index})">{esc(slot)}</span>'
+                        for index, slot in enumerate(config.TIME_SLOTS)) + "</div>")
+    return (f'<svg class="cgraph" viewBox="0 0 {width} {height}" role="img" aria-label="Exam constraint graph">{definitions}'
+            f'{"".join(lines)}{"".join(labels)}{"".join(nodes)}</svg>{legend}')
 
 
 def booking_grid(booking_table):
-    cells = ['<span class="hd">Room</span>'] + [f'<span class="hd">{esc(s)}</span>' for s in config.TIME_SLOTS]
+    """
+    Function: booking_grid
+    Purpose : Rooms x time slots grid showing every booking (exams, fixed
+              weekly bookings, bookings made by requests, free slots).
+    """
+    cells = ['<span class="hd">Room</span>'] + [f'<span class="hd">{esc(slot)}</span>' for slot in config.TIME_SLOTS]
     occupied = {(row.Slot, row.Room): row.Booked_By for row in booking_table.itertuples()}
-    index = 0
-    for room, info in config.ROOMS.items():
-        cells.append(f'<span class="rm">{nice(room)}<small>{esc(info["type"])} · {info["capacity"]} seats</small></span>')
+    cell_number = 0
+    for room, room_info in config.ROOMS.items():
+        cells.append(f'<span class="rm">{nice(room)}<small>{esc(room_info["type"])} · '
+                     f'{room_info["capacity"]} seats</small></span>')
         for slot in config.TIME_SLOTS:
             owner = occupied.get((slot, room))
             if owner is None:
-                cls, text = "free", "free"
+                css_class, text = "free", "free"
             elif owner.startswith("Exam"):
-                cls, text = "exam", owner
+                css_class, text = "exam", owner
             elif owner in FIXED_BOOKINGS:
-                cls, text = "fixed", owner
+                css_class, text = "fixed", owner
             else:
-                cls, text = "session", owner
-            cells.append(f'<span class="bcell {cls}" style="animation-delay:{index * 0.012:.3f}s">{esc(text)}</span>')
-            index += 1
+                css_class, text = "session", owner
+            cells.append(f'<span class="bcell {css_class}" style="animation-delay:{cell_number * 0.012:.3f}s">'
+                         f'{esc(text)}</span>')
+            cell_number += 1
     legend = ('<div class="legend"><span style="color:color-mix(in srgb,var(--l-elig) 30%,var(--panel))"><i></i>'
-              '<span style="color:var(--ink)">Exam</span></span><span style="color:var(--panel-2)"><i style="outline:1px solid var(--rule)"></i>'
-              '<span style="color:var(--ink)">Fixed weekly</span></span><span style="color:var(--brand)"><i></i>'
-              '<span style="color:var(--ink)">Booked by a request</span></span><span style="color:var(--rule)"><i></i>'
-              '<span style="color:var(--ink)">Free</span></span></div>')
+              '<span style="color:var(--ink)">Exam</span></span><span style="color:var(--panel-2)">'
+              '<i style="outline:1px solid var(--rule)"></i><span style="color:var(--ink)">Fixed weekly</span></span>'
+              '<span style="color:var(--brand)"><i></i><span style="color:var(--ink)">Booked by a request</span></span>'
+              '<span style="color:var(--rule)"><i></i><span style="color:var(--ink)">Free</span></span></div>')
     return f'<div class="bgridbox"><div class="bgrid">{"".join(cells)}</div></div>{legend}'
