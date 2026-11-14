@@ -322,25 +322,46 @@ def solve_exam_schedule():
 
 
 # -------------------------------------------------------------------
-# Booking scheduler used by Booking_or_Scheduling / Full_Service requests
+# Service scheduler used by Booking_or_Scheduling, Urgent_Service_Request
+# and Full_Service_Request
 # -------------------------------------------------------------------
+def slot_number(slot_time):
+    """
+    Function: slot_number
+    Purpose : Time slot text ('11:00-12:30') to its number 1-4.
+    """
+    return config.TIME_SLOTS.index(slot_time) + 1
+
+
+def slot_time(number):
+    """
+    Function: slot_time
+    Purpose : Slot number 1-4 to its time text.
+    """
+    return config.TIME_SLOTS[number - 1]
+
+
 class CampusScheduler:
     """
     Class: CampusScheduler
-    Purpose: Keep track of occupied (slot, room) pairs and assign new
-             booking requests with a CSP.
+    Purpose: Keep track of occupied (slot, room) pairs and assign a room
+             and slot to each service request with a CSP.
     """
 
     def __init__(self):
         """
         Function: __init__
         Purpose : Start with the solved exam timetable plus a few fixed
-                  weekly bookings already occupying rooms.
+                  weekly bookings already occupying rooms. The exam slot of
+                  each group is remembered: a group cannot book a viva or
+                  service at the time of its own exam.
         """
-        self.occupied = {}             # (slot, room) -> booked_by
+        self.occupied = {}             # (slot_time, room) -> booked_by
         exam_result = solve_exam_schedule()
+        self.group_exam_slot = {}
         for group, value in exam_result["solution"].items():
             self.occupied[value] = f"Exam {group}"
+            self.group_exam_slot[group] = value[0]
         fixed_bookings = [
             (("09:00-10:30", "Lab1"), "AI Lab class (DrKhan)"),
             (("09:00-10:30", "Study_Room_L1"), "Reading group"),
@@ -358,80 +379,86 @@ class CampusScheduler:
                 for (slot, room), owner in self.occupied.items()]
         return pd.DataFrame(rows).sort_values(["Slot", "Room"]).reset_index(drop=True)
 
-    def schedule_request(self, user_id, resource_type, group_size, preferred_slot=None,
-                         sessions=1, priority_label=None, commit=True):
+    def schedule_request(self, name, category, preferred_slot=None, group_id="", priority_label=None,
+                         commit=True):
         """
         Function: schedule_request
-        Purpose : Build and solve a CSP for one booking request.
-                  Variables : Session_1 .. Session_n
-                  Domain    : (slot, room) with matching room type, enough
-                              capacity, free, and not in the user's busy slots
-                  Constraints: sessions in different and increasing slots
-                  Preference : preferred slot first; Urgent/High priority
-                               (from ANN) prefers the earliest slot; LCV
-                               keeps larger rooms free.
-        Returns : dict with success flag, assignment rows and statistics
+        Purpose : Build and solve the CSP for one service request.
+                  Variable   : Assignment
+                  Domain     : (slot, room) for every room that serves the
+                               category and every time slot
+                  Constraints: room capacity >= group size, room free in
+                               that slot, the person (or group) is not
+                               busy then (fixed commitments, group exam)
+                  Preference : preferred slot first, then the next later
+                               slots; an 'urgent' MLP priority takes the
+                               earliest free slot instead.
+        Returns : standard CSP output {decision, assigned_room,
+                  assigned_slot, destination, notes} plus solver details
         """
-        if resource_type not in config.RESOURCE_TYPES:
-            raise SchedulingError(f"Unknown resource type '{resource_type}'.")
-        if group_size <= 0:
-            raise SchedulingError("Group size must be a positive number.")
-        if not 1 <= sessions <= len(config.TIME_SLOTS):
-            raise SchedulingError(f"Sessions must be between 1 and {len(config.TIME_SLOTS)}.")
-        if preferred_slot is not None and preferred_slot not in config.TIME_SLOTS:
-            raise SchedulingError(f"Preferred slot must be one of {config.TIME_SLOTS}.")
+        if category not in config.CATEGORY_ROOMS:
+            raise SchedulingError(f"Unknown category '{category}'.")
+        if preferred_slot is not None and preferred_slot not in config.SLOT_NUMBERS:
+            raise SchedulingError(f"Preferred slot must be one of {config.SLOT_NUMBERS}.")
+        if group_id and group_id not in EXAM_GROUPS:
+            raise SchedulingError(f"Unknown group '{group_id}'. Known groups: {', '.join(EXAM_GROUPS)}.")
 
-        busy_slots = set(config.USER_BUSY_SLOTS.get(user_id, []))
+        group_size = EXAM_GROUPS[group_id] if group_id else 1
+        busy_slots = {slot_time(number) for number in config.USER_BUSY_SLOTS.get(name, [])}
+        busy_reasons = {slot: f"{name} is busy" for slot in busy_slots}
+        if group_id:
+            busy_slots.add(self.group_exam_slot[group_id])
+            busy_reasons[self.group_exam_slot[group_id]] = f"group {group_id} has its exam"
+        rooms = config.CATEGORY_ROOMS[category]
         candidate_values = [
-            (slot, room)
-            for slot in config.TIME_SLOTS for room, info in config.ROOMS.items()
-            if info["type"] == resource_type and info["capacity"] >= group_size
+            (slot, room) for slot in config.TIME_SLOTS for room in rooms
+            if config.ROOMS[room]["capacity"] >= group_size
             and (slot, room) not in self.occupied and slot not in busy_slots
         ]
-        session_names = [f"Session_{number}" for number in range(1, sessions + 1)]
-        csp = ConstraintSatisfactionProblem(session_names,
-                                            {name: candidate_values for name in session_names})
-        for index in range(len(session_names) - 1):
-            csp.add_constraint(session_names[index], session_names[index + 1],
-                               comes_before, "sessions in increasing slots")
-
-        urgent = priority_label in ("Urgent", "High")
+        csp = ConstraintSatisfactionProblem(["Assignment"], {"Assignment": candidate_values})
+        urgent = priority_label == "urgent"
 
         def value_preference(_, value):
             """
             Function: value_preference
-            Purpose : Tie-break key for LCV ordering - preferred slot first,
-                      earliest slot for urgent requests, then the smallest
-                      room that fits (keeps bigger rooms available).
+            Purpose : Value ordering - earliest slot for urgent requests,
+                      otherwise the preferred slot, then the next later
+                      slots, then earlier ones; smallest fitting room first
+                      so bigger rooms stay free (LCV tie-break).
             """
-            preferred_rank = 0 if preferred_slot and value[0] == preferred_slot else 1
+            number = slot_number(value[0])
             capacity = config.ROOMS[value[1]]["capacity"]
-            if urgent:
-                return (slot_index(value), preferred_rank, capacity)
-            return (preferred_rank, capacity, slot_index(value))
+            if urgent or preferred_slot is None:
+                return (number, capacity)
+            distance = number - preferred_slot
+            return (0 if distance >= 0 else 1, abs(distance), capacity)
 
         solution = csp.solve(value_preference) if candidate_values else None
-        reasons = []
+        details = {"statistics": dict(csp.statistics), "domain_size": len(candidate_values),
+                   "group_size": group_size, "rooms_considered": rooms}
         if solution is None:
-            if not any(info["type"] == resource_type and info["capacity"] >= group_size
-                       for info in config.ROOMS.values()):
-                reasons.append(f"No {resource_type} has capacity for {group_size} people")
-            elif not candidate_values:
-                reasons.append(f"Every suitable {resource_type} is already booked in your free slots")
+            if not any(config.ROOMS[room]["capacity"] >= group_size for room in rooms):
+                notes = (f"No room for {category} can hold {group_size} people "
+                         f"(group {group_id}).")
             else:
-                reasons.append(f"Not enough free slots for {sessions} separate sessions")
-            return {"success": False, "assignments": [], "statistics": dict(csp.statistics),
-                    "reasons": reasons, "domain_size": len(candidate_values)}
+                notes = f"Every room for {category} is already booked in the free slots."
+            return {**config.CSP_OUTPUT_TEMPLATE, "decision": "rejected", "notes": notes, **details}
 
-        assignments = []
-        for name in session_names:
-            slot, room = solution[name]
-            if commit:
-                self.occupied[(slot, room)] = f"{user_id} ({resource_type})"
-            assignments.append({"session": name, "slot": slot, "room": room,
-                                "building": config.ROOMS[room]["building"],
-                                "capacity": config.ROOMS[room]["capacity"]})
-        if preferred_slot and assignments[0]["slot"] != preferred_slot:
-            reasons.append(f"Preferred slot {preferred_slot} was not available")
-        return {"success": True, "assignments": assignments, "statistics": dict(csp.statistics),
-                "reasons": reasons, "domain_size": len(candidate_values)}
+        assigned_time, room = solution["Assignment"]
+        number = slot_number(assigned_time)
+        if commit:
+            self.occupied[(assigned_time, room)] = f"{name} ({category}{', ' + group_id if group_id else ''})"
+        notes = []
+        if urgent and preferred_slot and number != preferred_slot:
+            notes.append(f"Urgent priority: the earliest free slot {number} was given instead of "
+                         f"preferred slot {preferred_slot}.")
+        elif preferred_slot and number != preferred_slot:
+            reason = busy_reasons.get(slot_time(preferred_slot), "every suitable room is taken")
+            notes.append(f"Preferred slot {preferred_slot} was unavailable ({reason}). "
+                         f"Slot {number} is the next feasible conflict-free assignment.")
+        else:
+            notes.append(f"Slot {number} ({assigned_time}) in {room} is free and fits {group_size} "
+                         f"{'person' if group_size == 1 else 'people'}.")
+        return {**config.CSP_OUTPUT_TEMPLATE, "decision": "accepted", "assigned_room": room,
+                "assigned_slot": number, "slot_time": assigned_time,
+                "destination": config.ROOMS[room]["building"], "notes": " ".join(notes), **details}

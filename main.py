@@ -8,7 +8,7 @@ Run:  python main.py
 
 Menu:
   1. Submit a new request            5. Knowledge base (facts, rules, queries)
-  2. Run demo requests               6. Campus navigation (BFS / UCS / A*)
+  2. Run demo requests               6. Campus navigation (compare 9 search algorithms)
   3. Process batch CSV of requests   7. CSP exam & room schedule
   4. Train / evaluate ANN models     0. Exit
 -----------------------------------------------------------------------
@@ -24,43 +24,48 @@ from csp_scheduler import solve_exam_schedule
 from knowledge_base import KnowledgeBaseError, format_atom, parse_atom
 from response_layer import format_response, log_response
 from router import SmartCampusSystem
-from search_navigation import NavigationError, compare_algorithms
+from search_navigation import NavigationError, compare_algorithms, find_route
 
 BANNER_TEXT = ("=" * 72 + "\n   SMART CAMPUS AI DECISION SUPPORT AND AUTOMATION SYSTEM\n" + "=" * 72)
 MAIN_MENU_TEXT = ("\n  MAIN MENU\n   1. Submit a new request\n   2. Run demo requests\n"
                   "   3. Process batch CSV of requests\n   4. Train / evaluate ANN models\n"
-                  "   5. Knowledge base (facts, rules, queries)\n   6. Campus navigation (BFS / UCS / A*)\n"
+                  "   5. Knowledge base (facts, rules, queries)\n   6. Campus navigation (compare 9 search algorithms)\n"
                   "   7. CSP exam & room schedule\n   0. Exit")
 
-# One example per request type plus a rejection and an invalid request.
+# One example per request type (inputs from the student handout) plus
+# rejections at every stage: Logic_KB, CSP and preprocessing.
 DEMO_REQUESTS = [
-    {"title": "Navigation_Only (A*, weighted)",
-     "request": {"user_id": "Ali", "role": "Student", "request_type": "Navigation_Only",
-                 "source": "Main_Gate", "destination": "AI_Lab"}},
-    {"title": "Navigation_Only (BFS, fewest stops)",
-     "request": {"user_id": "Sara", "role": "Student", "request_type": "nav",
-                 "source": "hostel", "destination": "exam hall", "route_preference": "stops"}},
-    {"title": "Eligibility_Check (approved)",
-     "request": {"user_id": "Ali", "role": "Student", "request_type": "Eligibility_Check", "target": "AI"}},
-    {"title": "Eligibility_Check (rejected - missing prerequisite)",
-     "request": {"user_id": "Sara", "role": "Student", "request_type": "Eligibility_Check", "target": "AI"}},
-    {"title": "Booking_or_Scheduling (instructor books seminar room)",
-     "request": {"user_id": "DrKhan", "role": "Instructor", "request_type": "Booking_or_Scheduling",
-                 "resource_type": "SeminarRoom", "group_size": 40, "preferred_slot": "14:00-15:30"}},
-    {"title": "Booking_or_Scheduling (rejected - student cannot book seminar room)",
-     "request": {"user_id": "Fatima", "role": "Student", "request_type": "booking",
-                 "resource_type": "SeminarRoom", "group_size": 25}},
-    {"title": "Urgent_Service_Request (medical emergency)",
-     "request": {"user_id": "Fatima", "role": "Student", "request_type": "Urgent_Service_Request",
-                 "source": "Hostel", "service_type": "Medical", "severity": 5,
-                 "time_sensitivity": 5, "crowd_level": 4}},
-    {"title": "Full_Service_Request (ANN -> Logic -> CSP -> Search)",
-     "request": {"user_id": "Ali", "role": "Student", "request_type": "Full_Service_Request",
-                 "source": "Main_Gate", "resource_type": "ComputerLab", "group_size": 20,
-                 "severity": 3, "time_sensitivity": 4, "crowd_level": 2, "sessions": 2}},
-    {"title": "Invalid request (unknown building, severity out of range)",
-     "request": {"user_id": "Ali", "role": "Student", "request_type": "urgent", "source": "Moon",
-                 "service_type": "Medical", "severity": 9, "time_sensitivity": 5, "crowd_level": 3}},
+    {"title": "Navigation_Only - Hostel to AI_Lab (A*)",
+     "request": {"name": "Ali", "role": "student", "request_type": "Navigation_Only",
+                 "current_location": "Hostel", "destination": "AI_Lab"}},
+    {"title": "Eligibility_Check - UsesLab(DrKhan, Lab1) is entailed",
+     "request": {"name": "DrKhan", "role": "instructor", "request_type": "Eligibility_Check",
+                 "query": "UsesLab(DrKhan, Lab1)"}},
+    {"title": "Eligibility_Check - Eligible(Sara, AI) is not entailed (missing prerequisite)",
+     "request": {"name": "Sara", "role": "student", "request_type": "Eligibility_Check",
+                 "query": "Eligible(Sara, AI)"}},
+    {"title": "Booking_or_Scheduling - viva for group G4 (preferred slot clashes with its exam)",
+     "request": {"name": "Ahmed", "role": "student", "request_type": "Booking_or_Scheduling",
+                 "category": "Viva_Scheduling", "preferred_slot": 2, "group_id": "G4",
+                 "current_location": "Library"}},
+    {"title": "Booking_or_Scheduling - rejected by Logic/KB (Sara may not use the AI lab)",
+     "request": {"name": "Sara", "role": "student", "request_type": "booking",
+                 "category": "AI_Lab_Support", "preferred_slot": 3}},
+    {"title": "Urgent_Service_Request - emergency help from the Hostel",
+     "request": {"name": "Fatima", "role": "student", "request_type": "Urgent_Service_Request",
+                 "category": "Emergency_Help", "current_location": "Hostel", "severity": 10,
+                 "time_sensitivity": 10, "crowd_level": 7}},
+    {"title": "Full_Service_Request - urgent AI lab support (ANN -> Logic -> CSP -> Search)",
+     "request": {"name": "Ali", "role": "student", "request_type": "Full_Service_Request",
+                 "category": "AI_Lab_Support", "current_location": "Hostel", "preferred_slot": 2,
+                 "severity": 8, "time_sensitivity": 9, "crowd_level": 5,
+                 "description_note": "Need urgent help before practical evaluation."}},
+    {"title": "Booking_or_Scheduling - rejected by CSP (no study room fits group G2)",
+     "request": {"name": "Sara", "role": "student", "request_type": "Booking_or_Scheduling",
+                 "category": "Access_Request", "preferred_slot": 1, "group_id": "G2"}},
+    {"title": "Invalid request - unknown location, severity out of range",
+     "request": {"name": "Ali", "role": "student", "request_type": "urgent", "category": "AI_Lab_Support",
+                 "current_location": "Moon", "severity": 15, "time_sensitivity": 5, "crowd_level": 3}},
 ]
 
 
@@ -131,36 +136,40 @@ def offer_to_open(file_path):
 def collect_request_interactively(system):
     """
     Function: collect_request_interactively
-    Purpose : Guide the user through the fields needed for the chosen
-              request type and return a raw request dictionary.
+    Purpose : Structured CLI request form (handout 1.2): ask for the
+              fields one by one - name, role, request type, then only the
+              fields that request type uses. Returns a raw request dict.
     """
     locations = system.campus_graph.nodes
     raw_request = {
-        "request_type": ask_choice("Request type", config.REQUEST_TYPES),
-        "user_id": ask_text("User id (e.g. Ali, Sara, DrKhan, Bilal)"),
-        "role": ask_choice("Role", config.VALID_ROLES),
+        "name": ask_text("Enter Name (e.g. Ali, Sara, Ahmed, Fatima, DrKhan, DrAyesha, Bilal)"),
+        "role": ask_choice("Enter Role", config.VALID_ROLES),
+        "request_type": ask_choice("Enter Request Type", config.REQUEST_TYPES),
     }
     request_type = config.REQUEST_TYPE_ALIASES.get(raw_request["request_type"].strip().lower(),
                                                    raw_request["request_type"])
-    if request_type in ("Navigation_Only", "Urgent_Service_Request", "Full_Service_Request"):
-        raw_request["source"] = ask_choice("Current location", locations)
-    if request_type == "Navigation_Only":
-        raw_request["destination"] = ask_choice("Destination", locations)
-    if request_type in ("Navigation_Only", "Full_Service_Request"):
-        raw_request["route_preference"] = ask_choice("Route preference", config.ROUTE_PREFERENCES, True)
-    if request_type == "Eligibility_Check":
-        raw_request["target"] = ask_choice("Course or resource to check", system.eligibility_targets())
-    if request_type in ("Booking_or_Scheduling", "Full_Service_Request"):
-        raw_request["resource_type"] = ask_choice("Resource type", config.RESOURCE_TYPES)
-        raw_request["group_size"] = ask_text("Group size (number of people)")
-        raw_request["preferred_slot"] = ask_choice("Preferred time slot", config.TIME_SLOTS, True)
-        raw_request["sessions"] = ask_text("Number of sessions (1-4)", optional=True)
-    if request_type == "Urgent_Service_Request":
-        raw_request["service_type"] = ask_choice("Service needed", list(config.SERVICE_DESTINATIONS))
-    if request_type in ("Urgent_Service_Request", "Full_Service_Request"):
-        raw_request["severity"] = ask_text("Severity 1-5")
-        raw_request["time_sensitivity"] = ask_text("Time sensitivity 1-5")
-        raw_request["crowd_level"] = ask_text("Crowd level 1-5")
+    fields = config.TYPE_REQUIRED_FIELDS.get(request_type, []) + config.TYPE_OPTIONAL_FIELDS.get(request_type, [])
+    optional = set(config.TYPE_OPTIONAL_FIELDS.get(request_type, []))
+    level_range = f"({config.LEVEL_MIN}-{config.LEVEL_MAX})"
+    prompts = {
+        "category": lambda: ask_choice("Enter Category", config.CATEGORIES, "category" in optional),
+        "current_location": lambda: ask_choice("Enter Current Location" + (" (for route guidance)"
+                                                                           if "current_location" in optional else ""),
+                                               locations, "current_location" in optional),
+        "destination": lambda: ask_choice("Enter Destination", locations),
+        "preferred_slot": lambda: ask_choice("Enter Preferred Slot (1-4)",
+                                             [f"{number}  ({time})" for number, time in
+                                              zip(config.SLOT_NUMBERS, config.TIME_SLOTS)],
+                                             "preferred_slot" in optional).split(" ")[0],
+        "severity": lambda: ask_text(f"Enter Severity {level_range}"),
+        "time_sensitivity": lambda: ask_text(f"Enter Time Sensitivity {level_range}"),
+        "crowd_level": lambda: ask_text(f"Enter Crowd Level {level_range}"),
+        "group_id": lambda: ask_choice("Enter Group (if group-based)", config.GROUP_IDS, optional=True),
+        "query": lambda: ask_text("Enter Query, e.g. Eligible(Ali, AI) or UsesLab(DrKhan, Lab1)"),
+        "description_note": lambda: ask_text("Enter Description Note", optional=True),
+    }
+    for field in fields:
+        raw_request[field] = prompts[field]()
     return raw_request
 
 
@@ -175,14 +184,14 @@ def handle_new_request(system):
         response = system.process_request(collect_request_interactively(system))
         print(format_response(response))
         log_response(response)
-        if response["status"] != "INVALID":
+        if response["rejected_at"] != "Preprocessing":
             break
         if not ask_yes_no("Request was invalid. Try again?"):
             return
-    if response["route"] and ask_yes_no("Draw this route on the campus map?"):
-        path = response["details"]["search"]["path"]
+    if response["route"] and len(response["route"]["path"]) > 1 and ask_yes_no("Draw this route on the campus map?"):
+        path = response["route"]["path"]
         offer_to_open(visualizer.plot_campus_graph(system.campus_graph, path,
-                                                   f"Route: {response['route']}",
+                                                   f"Route: {' -> '.join(path)}",
                                                    f"route_{response['request_id']}.png"))
 
 
@@ -209,7 +218,7 @@ def process_batch_csv(system, csv_path=config.BATCH_REQUEST_PATH):
     """
     Function: process_batch_csv
     Purpose : Menu 3 - read requests from a CSV with pandas, process every
-              row and print a summary table of statuses.
+              row and print a summary table of decisions.
     """
     try:
         requests_frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
@@ -221,18 +230,29 @@ def process_batch_csv(system, csv_path=config.BATCH_REQUEST_PATH):
         raw_request = {key: value for key, value in row.to_dict().items() if value != ""}
         response = system.process_request(raw_request)
         log_response(response)
-        summary_rows.append({"request_id": response["request_id"], "user": response["user_id"],
-                             "type": response["request_type"], "status": response["status"],
-                             "priority": response["priority"] or "-",
-                             "assignment": response["assignment"] or "-",
-                             "route": response["route"] or "-"})
+        summary_rows.append(batch_summary_row(response))
     summary = pd.DataFrame(summary_rows)
     with pd.option_context("display.max_colwidth", 45, "display.width", 200):
         print(summary.to_string(index=False))
-    print("\n  Status counts:")
-    print(summary["status"].value_counts().to_string())
+    print("\n  Decision counts:")
+    print(summary["decision"].value_counts().to_string())
     print(f"\n  Every response appended to {config.RESULTS_LOG_PATH}")
     return summary
+
+
+def batch_summary_row(response):
+    """
+    Function: batch_summary_row
+    Purpose : One summary row of a processed request for batch tables.
+    """
+    assignment = response["assignment"]
+    return {"request_id": response["request_id"], "name": response["name"],
+            "type": response["request_type"], "decision": response["decision"],
+            "rejected_at": response.get("rejected_at") or "-",
+            "priority": response["priority"].get("final_priority", "-"),
+            "assignment": f"{assignment['room']} slot {assignment['slot']}" if assignment else "-",
+            "route": " -> ".join(response["route"].get("path", [])) or "-",
+            "message": response["message"]}
 
 
 def train_models_menu(system, show_prompts=True):
@@ -245,15 +265,15 @@ def train_models_menu(system, show_prompts=True):
     print("\n  Training ANN models (this takes a few seconds)...")
     metrics = system.priority_predictor.train(verbose=True)
     print(f"\n  Train/test split : {metrics['train_size']} / {metrics['test_size']}")
-    print(f"  Perceptron (Urgent/High vs Normal/Low) test accuracy: {metrics['perceptron_accuracy']:.2%}")
-    print(f"  MLP 7-4-3-4 (Urgent/High/Normal/Low) test accuracy  : {metrics['mlp_accuracy']:.2%}")
+    print(f"  Perceptron (baseline: urgent vs not_urgent) test accuracy : {metrics['perceptron_accuracy']:.2%}")
+    print(f"  MLP 7-4-3-4 (final: urgent/high/normal/low) test accuracy : {metrics['mlp_accuracy']:.2%}")
     print("\n  MLP confusion matrix (rows = actual, cols = predicted):")
     print(pd.DataFrame(metrics["mlp_confusion"], index=config.PRIORITY_CLASSES,
                        columns=config.PRIORITY_CLASSES).to_string())
     plot_paths = [
         visualizer.plot_perceptron_errors(system.priority_predictor.perceptron.errors_per_epoch),
         visualizer.plot_mlp_history(system.priority_predictor.mlp.history),
-        visualizer.plot_confusion_matrix(metrics["perceptron_confusion"], ["Not urgent", "Urgent"],
+        visualizer.plot_confusion_matrix(metrics["perceptron_confusion"], config.BINARY_CLASSES,
                                          "Perceptron confusion matrix", "perceptron_confusion.png"),
         visualizer.plot_confusion_matrix(metrics["mlp_confusion"], config.PRIORITY_CLASSES,
                                          "MLP confusion matrix", "mlp_confusion.png"),
@@ -276,7 +296,7 @@ def knowledge_base_menu(system):
     knowledge_base = system.knowledge_base
     while True:
         print("\n  --- Knowledge base ---\n   1. Show facts\n   2. Show rules\n"
-              "   3. Query (backward chaining), e.g. Eligible(Ali, AI) or Eligible(x, AI)\n"
+              "   3. Query (backward chaining), e.g. Eligible(Ali, AI), UsesLab(DrKhan, Lab1) or Eligible(x, AI)\n"
               "   4. Forward chaining - list derived facts\n   5. Add a fact, e.g. Completed(Sara, ProgrammingFundamentals)\n"
               "   0. Back")
         choice = input("  Choice: ").strip()
@@ -318,8 +338,9 @@ def knowledge_base_menu(system):
 def navigation_menu(system):
     """
     Function: navigation_menu
-    Purpose : Menu 6 - compare BFS, UCS and A* on a chosen route and draw
-              the campus map with the A* route highlighted.
+    Purpose : Menu 6 - comparison / demo mode: run all nine search
+              algorithms on a chosen route and draw the campus map with
+              the operational (policy) route highlighted.
     """
     locations = system.campus_graph.nodes
     source = ask_choice("From", locations)
@@ -332,25 +353,31 @@ def navigation_menu(system):
 def show_route_comparison(system, source, destination):
     """
     Function: show_route_comparison
-    Purpose : Print the BFS / UCS / A* comparison table for one query and
-              save the comparison chart and the highlighted A* map.
+    Purpose : Print the comparison table of BFS, DFS, DLS, IDS,
+              Bidirectional BFS, UCS, Greedy Best-First, A* and RBFS for
+              one query, name the algorithm the policy uses, and save the
+              comparison chart and the highlighted map.
     Returns : [comparison_chart_path, map_path] or [] on invalid input
     """
     try:
         results = compare_algorithms(source, destination, system.campus_graph)
+        operational = find_route(source, destination, system.graph_type, system.use_heuristic, system.campus_graph)
     except NavigationError as error:
         print(f"  {error}")
         return []
     print(f"\n  Route {source} -> {destination}")
+    print(f"  Operational policy: {operational['policy']}  =>  {' -> '.join(operational['path'])}")
     print(f"  A* heuristic = {system.campus_graph.heuristic_scale:.3f} x Euclidean distance (admissible)")
-    print(f"  {'Algorithm':10s}{'Cost':>6s}{'Stops':>7s}{'Expanded':>10s}  Path")
+    print(f"\n  {'Algorithm':20s}{'Graph':>11s}{'Cost':>6s}{'Steps':>7s}{'Expanded':>10s}{'ms':>8s}  Path")
     for result in results:
-        print(f"  {result['algorithm']:10s}{result['cost']:>6}{result['hops']:>7}"
-              f"{result['nodes_expanded']:>10}  {' -> '.join(result['path'])}")
+        path_text = " -> ".join(result["path"]) if result["found"] else "(not found within the depth limit)"
+        print(f"  {result['algorithm_used']:20s}{result['graph_type']:>11s}{str(result['cost'] if result['found'] else '-'):>6s}"
+              f"{str(result['steps'] if result['found'] else '-'):>7s}{result['nodes_expanded']:>10}"
+              f"{result['execution_time_ms']:>8.2f}  {path_text}")
     file_suffix = f"{source}_{destination}"
     return [visualizer.plot_algorithm_comparison(results, f"search_comparison_{file_suffix}.png"),
-            visualizer.plot_campus_graph(system.campus_graph, results[2]["path"],
-                                         f"A* route {source} -> {destination}",
+            visualizer.plot_campus_graph(system.campus_graph, operational["path"],
+                                         f"{operational['algorithm_used']} route {source} -> {destination}",
                                          f"campus_route_{file_suffix}.png")]
 
 

@@ -1,18 +1,23 @@
-user_id,role,request_type,source,destination,target,resource_type,group_size,preferred_slot,sessions,service_type,severity,time_sensitivity,crowd_level,route_preference
-Ali,Student,Navigation_Only,Main_Gate,Seminar_Room,,,,,,,,,,distance
-Sara,Student,Navigation_Only,Bus_Stop,AI_Lab,,,,,,,,,,stops
-Bilal,Staff,Navigation_Only,Hostel,Exam_Hall,,,,,,,,,,distance_no_heuristic
-Ahmed,Student,Eligibility_Check,,,MachineLearning,,,,,,,,,
-Sara,Student,Eligibility_Check,,,DataStructures,,,,,,,,,
-DrKhan,Instructor,Eligibility_Check,,,Lab1,,,,,,,,,
-Fatima,Student,Booking_or_Scheduling,,,,StudyRoom,5,11:00-12:30,,,,,,
-Bilal,Staff,Booking_or_Scheduling,,,,MeetingRoom,10,,,,,,,
-DrAyesha,Instructor,Booking_or_Scheduling,,,,ExamHall,200,,,,,,,
-Sara,Student,Booking_or_Scheduling,,,,ComputerLab,15,,,,,,,
-Ahmed,Student,Urgent_Service_Request,Cafeteria,,,,,,,IT_Support,3,4,3,
-Bilal,Staff,Urgent_Service_Request,Parking,,,,,,,Security,4,5,5,
-Zain,Student,Urgent_Service_Request,Library,,,,,,,Medical,5,5,2,
-DrKhan,Instructor,Full_Service_Request,Bus_Stop,,,SeminarRoom,50,,,,4,4,3,
-Fatima,Student,Full_Service_Request,Hostel,,,StudyRoom,8,,2,,2,2,1,
-Ali,Student,Full_Service_Request,Main_Gate,,,ComputerLab,abc,,,,2,2,2,
-,Student,Navigation_Only,Library,Cafeteria,,,,,,,,,,
+name,role,request_type,category,current_location,destination,preferred_slot,severity,time_sensitivity,crowd_level,group_id,query,eligibility_claim,description_note
+Ali,student,Navigation_Only,,Hostel,AI_Lab,,,,,,,,
+Sara,student,Navigation_Only,,Bus_Stop,Seminar_Room,,,,,,,,
+Bilal,staff,navigation,,main gate,exam hall,,,,,,,,
+DrKhan,instructor,Eligibility_Check,,,,,,,,,"UsesLab(DrKhan, Lab1)",,
+Ahmed,student,Eligibility_Check,,,,,,,,,"Eligible(Ahmed, MachineLearning)",,
+Sara,student,Eligibility_Check,,,,,,,,,"Eligible(Sara, AI)",,
+Ahmed,student,Booking_or_Scheduling,Viva_Scheduling,Library,,2,,,,G4,,,Viva for group G4
+DrAyesha,instructor,Booking_or_Scheduling,viva,,,1,,,,G5,,,
+Fatima,student,booking,Access_Request,,,3,,,,,,,Study room for revision
+Sara,student,Booking_or_Scheduling,AI_Lab_Support,,,2,,,,,,,
+Bilal,staff,Booking_or_Scheduling,Maintenance,Admin_Block,,1,,,,,,,Broken projector in Admin Block
+Fatima,student,Urgent_Service_Request,Emergency_Help,Hostel,,,10,10,7,,,true,Feeling unwell
+Bilal,staff,urgent,Maintenance,Parking,,,7,8,3,,,,Water leak near the parking
+Ahmed,student,Urgent_Service_Request,AI_Lab_Support,Cafeteria,,4,4,3,2,,,,
+Zain,student,Urgent_Service_Request,Emergency_Help,Hostel,,,9,9,6,,,,
+Ali,student,Full_Service_Request,AI_Lab_Support,Hostel,,2,8,9,5,,,true,Need urgent help before practical evaluation.
+DrKhan,instructor,Full_Service_Request,Viva_Scheduling,Main_Gate,,3,5,6,2,G2,,,
+Fatima,student,Full_Service_Request,Access_Request,Medical_Center,,1,2,3,4,,,,
+Sara,student,Full_Service_Request,Access_Request,Hostel,,2,4,5,3,G3,,,
+Ali,student,Urgent_Service_Request,AI_Lab_Support,Moon,,,15,5,3,,,,
+Ahmed,student,Booking_or_Scheduling,Viva_Scheduling,,,7,,,,,,,
+,student,Navigation_Only,,Hostel,Library,,,,,,,,

@@ -4,15 +4,23 @@ search_navigation.py
 Module 3.6 - Search & Navigation
 Computes campus routes on the predefined campus graph.
 
-Project policy:
-  * BFS  -> unweighted route problems (fewest stops)
-  * A*   -> weighted route problems when a heuristic is available
-  * UCS  -> weighted route problems without a suitable heuristic (fallback)
+Two working modes (handout, Search module):
+  * Operational mode - one algorithm, one route, chosen by the policy:
+        unweighted graph               -> BFS
+        weighted graph + heuristic     -> A*
+        weighted graph, no heuristic   -> UCS (fallback)
+  * Comparison / demo mode - every algorithm runs on the same query:
+        unweighted: BFS, DFS, DLS, IDS, Bidirectional BFS
+        weighted  : UCS, Greedy Best-First, A*, RBFS
+Every result follows the standard search output
+{algorithm_used, path, cost, steps} plus optional academic fields
+(nodes_expanded, expanded_order, execution_time_ms).
 -----------------------------------------------------------------------
 """
 
 import heapq
 import math
+import time
 from collections import deque
 
 import numpy as np
@@ -69,7 +77,8 @@ class CampusGraph:
     """
     Class: CampusGraph
     Purpose: Store the campus map as an adjacency list (weighted and
-             unweighted views) and provide BFS, UCS and A* route search.
+             unweighted views) and provide every search algorithm of the
+             lab sequence.
     """
 
     def __init__(self, edges=None, coordinates=None):
@@ -198,7 +207,7 @@ class CampusGraph:
         frontier = deque([start_node])
         expanded_order = []
         if start_node == goal_node:
-            return self._result("BFS", [start_node], expanded_order)
+            return self._result("BFS", [start_node], expanded_order, "unweighted")
         while frontier:
             current_node = frontier.popleft()
             expanded_order.append(current_node)
@@ -212,7 +221,7 @@ class CampusGraph:
                         self._record_step(trace, "BFS", current_node, None, neighbour_decisions,
                                           list(frontier), parent_map, expanded_order, goal_reached=True)
                         return self._result("BFS", self._rebuild_path(parent_map, goal_node),
-                                            expanded_order)
+                                            expanded_order, "unweighted")
                     frontier.append(neighbour)
                     neighbour_decisions.append(self._decision(neighbour, current_node, None, "added",
                                                               "new node, added to the back of the queue"))
@@ -334,19 +343,222 @@ class CampusGraph:
             step.update(dict(zip(("g", "h", "f"), current_values)))
         trace.append(step)
 
-    def _result(self, algorithm_name, path, expanded_order):
+    def _result(self, algorithm_name, path, expanded_order, graph_type="weighted"):
         """
         Function: _result
-        Purpose : Package a search result into a uniform dictionary.
+        Purpose : Package a search result into the standard search output
+                  (algorithm_used, path, cost, steps) plus academic fields.
+                  An empty path means the algorithm found no route (for
+                  example Depth-Limited Search hitting its limit).
         """
+        found = bool(path)
         return {
-            "algorithm": algorithm_name,
+            "algorithm_used": algorithm_name,
             "path": path,
-            "hops": len(path) - 1,
-            "cost": self.path_cost(path),
+            "cost": self.path_cost(path) if found else None,
+            "steps": len(path) - 1 if found else None,
             "nodes_expanded": len(expanded_order),
             "expanded_order": expanded_order,
+            "graph_type": graph_type,
+            "found": found,
         }
+
+    # ---------------------------------------------------------------
+    # Comparison algorithms (academic mode)
+    # ---------------------------------------------------------------
+    def depth_first_search(self, start_node, goal_node):
+        """
+        Function: depth_first_search
+        Purpose : DFS (graph search, LIFO stack). Finds a route quickly but
+                  not necessarily the shortest one. Unweighted view.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        stack = [(start_node, [start_node])]
+        visited, expanded_order = set(), []
+        while stack:
+            current_node, path = stack.pop()
+            if current_node in visited:
+                continue
+            visited.add(current_node)
+            expanded_order.append(current_node)
+            if current_node == goal_node:
+                return self._result("DFS", path, expanded_order, "unweighted")
+            # push in reverse so the alphabetically first neighbour is explored first
+            for neighbour in sorted(self.adjacency[current_node], reverse=True):
+                if neighbour not in visited:
+                    stack.append((neighbour, path + [neighbour]))
+        raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+
+    def depth_limited_search(self, start_node, goal_node, depth_limit=config.DEPTH_LIMIT,
+                             expanded_order=None):
+        """
+        Function: depth_limited_search
+        Purpose : DLS - depth-first search that never goes deeper than
+                  depth_limit edges (no cycles along the current path).
+                  Returns a result with found=False when the limit cuts
+                  the search off before the goal.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        if depth_limit < 0:
+            raise NavigationError("Depth limit must be zero or more.")
+        expanded_order = [] if expanded_order is None else expanded_order
+
+        def recursive_dls(node, path, remaining):
+            """
+            Function: recursive_dls
+            Purpose : Expand node; return the path to the goal or None.
+            """
+            expanded_order.append(node)
+            if node == goal_node:
+                return path
+            if remaining == 0:
+                return None
+            for neighbour in sorted(self.adjacency[node]):
+                if neighbour not in path:
+                    found_path = recursive_dls(neighbour, path + [neighbour], remaining - 1)
+                    if found_path:
+                        return found_path
+            return None
+
+        path = recursive_dls(start_node, [start_node], depth_limit)
+        result = self._result(f"DLS (limit {depth_limit})", path or [], expanded_order, "unweighted")
+        result["depth_limit"] = depth_limit
+        return result
+
+    def iterative_deepening_search(self, start_node, goal_node):
+        """
+        Function: iterative_deepening_search
+        Purpose : IDS - run DLS with limit 0, 1, 2, ... until the goal is
+                  found. Finds the fewest-stops route like BFS with the
+                  memory use of DFS; nodes are re-expanded at every depth.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        expanded_order = []
+        for depth_limit in range(len(self.adjacency)):
+            result = self.depth_limited_search(start_node, goal_node, depth_limit, expanded_order)
+            if result["found"]:
+                final = self._result("IDS", result["path"], expanded_order, "unweighted")
+                final["depth_limit"] = depth_limit
+                return final
+        raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+
+    def bidirectional_bfs(self, start_node, goal_node):
+        """
+        Function: bidirectional_bfs
+        Purpose : Bidirectional BFS - grow one BFS from the start and one
+                  from the goal, one level at a time, until they meet.
+                  Fewest-stops route while expanding fewer nodes.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        if start_node == goal_node:
+            return self._result("Bidirectional BFS", [start_node], [], "unweighted")
+        parents = {"forward": {start_node: None}, "backward": {goal_node: None}}
+        frontiers = {"forward": deque([start_node]), "backward": deque([goal_node])}
+        expanded_order = []
+        while frontiers["forward"] and frontiers["backward"]:
+            for side, other_side in (("forward", "backward"), ("backward", "forward")):
+                for _ in range(len(frontiers[side])):            # expand one whole level
+                    current_node = frontiers[side].popleft()
+                    expanded_order.append(current_node)
+                    for neighbour in sorted(self.adjacency[current_node]):
+                        if neighbour in parents[side]:
+                            continue
+                        parents[side][neighbour] = current_node
+                        if neighbour in parents[other_side]:
+                            path = self._join_paths(parents, neighbour)
+                            return self._result("Bidirectional BFS", path, expanded_order, "unweighted")
+                        frontiers[side].append(neighbour)
+        raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+
+    @staticmethod
+    def _join_paths(parents, meeting_node):
+        """
+        Function: _join_paths
+        Purpose : Join the forward and backward BFS trees at the meeting node.
+        """
+        forward_path = [meeting_node]
+        while parents["forward"][forward_path[-1]] is not None:
+            forward_path.append(parents["forward"][forward_path[-1]])
+        backward_path = []
+        node = parents["backward"][meeting_node]
+        while node is not None:
+            backward_path.append(node)
+            node = parents["backward"][node]
+        return list(reversed(forward_path)) + backward_path
+
+    def greedy_best_first_search(self, start_node, goal_node):
+        """
+        Function: greedy_best_first_search
+        Purpose : Greedy Best-First Search - always expand the frontier node
+                  with the smallest heuristic h(n). Fast, but ignores the
+                  cost already travelled, so the route may not be cheapest.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        if not self.heuristic_available():
+            raise NavigationError("Greedy Best-First Search needs a heuristic (building coordinates).")
+        frontier = [(self.heuristic(start_node, goal_node), start_node)]
+        parent_map = {start_node: None}
+        visited, expanded_order = set(), []
+        while frontier:
+            _, current_node = heapq.heappop(frontier)
+            if current_node in visited:
+                continue
+            visited.add(current_node)
+            expanded_order.append(current_node)
+            if current_node == goal_node:
+                return self._result("Greedy Best-First", self._rebuild_path(parent_map, goal_node),
+                                    expanded_order)
+            for neighbour in sorted(self.adjacency[current_node]):
+                if neighbour not in visited and neighbour not in parent_map:
+                    parent_map[neighbour] = current_node
+                    heapq.heappush(frontier, (self.heuristic(neighbour, goal_node), neighbour))
+        raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+
+    def recursive_best_first_search(self, start_node, goal_node):
+        """
+        Function: recursive_best_first_search
+        Purpose : RBFS - A*-like search in linear memory. Follows the best
+                  child while its f = g + h stays within the best
+                  alternative; otherwise it backs up, remembering the
+                  child's best f value. Optimal with an admissible h.
+        """
+        self._validate_endpoints(start_node, goal_node)
+        if not self.heuristic_available():
+            raise NavigationError("RBFS needs a heuristic (building coordinates).")
+        expanded_order = []
+
+        def rbfs(node, path, cost_so_far, node_f, f_limit):
+            """
+            Function: rbfs
+            Purpose : One RBFS call. Returns (path or None, backed-up f).
+            """
+            expanded_order.append(node)
+            if node == goal_node:
+                return path, node_f
+            successors = []
+            for neighbour, edge_cost in sorted(self.adjacency[node].items()):
+                if neighbour in path:
+                    continue
+                child_cost = cost_so_far + edge_cost
+                child_f = max(child_cost + self.heuristic(neighbour, goal_node), node_f)
+                successors.append([child_f, child_cost, neighbour])
+            if not successors:
+                return None, math.inf
+            while True:
+                successors.sort()
+                best = successors[0]
+                if best[0] > f_limit:
+                    return None, best[0]
+                alternative = successors[1][0] if len(successors) > 1 else math.inf
+                found_path, best[0] = rbfs(best[2], path + [best[2]], best[1], best[0],
+                                           min(f_limit, alternative))
+                if found_path:
+                    return found_path, best[0]
+
+        path, _ = rbfs(start_node, [start_node], 0.0, self.heuristic(start_node, goal_node), math.inf)
+        if not path:
+            raise NavigationError(f"No route exists from {start_node} to {goal_node}.")
+        return self._result("RBFS", path, expanded_order)
 
 
 # -------------------------------------------------------------------
@@ -366,29 +578,40 @@ def get_campus_graph():
     return _DEFAULT_GRAPH
 
 
-def find_route(source, destination, route_preference=config.DEFAULT_ROUTE_PREFERENCE,
+def choose_algorithm(graph_type=config.DEFAULT_GRAPH_TYPE, use_heuristic=config.USE_HEURISTIC,
+                     campus_graph=None):
+    """
+    Function: choose_algorithm
+    Purpose : Official search policy of the project (handout 7.2):
+                unweighted                     -> BFS
+                weighted and heuristic usable  -> A*
+                weighted, no heuristic         -> UCS
+    Returns : (algorithm name, policy sentence)
+    """
+    campus_graph = campus_graph or get_campus_graph()
+    if graph_type not in config.GRAPH_TYPES:
+        raise NavigationError(f"Unknown graph type '{graph_type}'. Use one of {config.GRAPH_TYPES}.")
+    if graph_type == "unweighted":
+        return "BFS", "Unweighted graph -> BFS (fewest stops)"
+    if use_heuristic and campus_graph.heuristic_available():
+        return "A*", "Weighted graph with admissible heuristic -> A*"
+    return "UCS", "Weighted graph without heuristic -> UCS (fallback)"
+
+
+def find_route(source, destination, graph_type=config.DEFAULT_GRAPH_TYPE, use_heuristic=config.USE_HEURISTIC,
                campus_graph=None):
     """
     Function: find_route
-    Purpose : Apply the project search policy and return the route.
-                'stops'                 -> unweighted problem -> BFS
-                'distance'              -> weighted + heuristic -> A*
-                'distance_no_heuristic' -> weighted, no heuristic -> UCS
-    Returns : result dict from the selected algorithm plus 'policy' text
+    Purpose : Operational mode - run the ONE algorithm chosen by the
+              search policy and return the standard search output plus
+              the policy text.
     """
     campus_graph = campus_graph or get_campus_graph()
-    if route_preference == "stops":
-        result = campus_graph.breadth_first_search(source, destination)
-        result["policy"] = "Unweighted problem (fewest stops) -> BFS"
-    elif route_preference == "distance_no_heuristic" or not campus_graph.heuristic_available():
-        result = campus_graph.uniform_cost_search(source, destination)
-        result["policy"] = "Weighted problem without heuristic -> UCS (fallback)"
-    elif route_preference == "distance":
-        result = campus_graph.a_star_search(source, destination)
-        result["policy"] = "Weighted problem with admissible heuristic -> A*"
-    else:
-        raise NavigationError(f"Unknown route preference '{route_preference}'. "
-                              f"Use one of {config.ROUTE_PREFERENCES}.")
+    algorithm_name, policy = choose_algorithm(graph_type, use_heuristic, campus_graph)
+    searches = {"BFS": campus_graph.breadth_first_search, "UCS": campus_graph.uniform_cost_search,
+                "A*": campus_graph.a_star_search}
+    result = searches[algorithm_name](source, destination)
+    result["policy"] = policy
     return result
 
 
@@ -410,14 +633,38 @@ def trace_search(source, destination, algorithm_name, campus_graph=None):
     return result, trace
 
 
-def compare_algorithms(source, destination, campus_graph=None):
+OPERATIONAL_ALGORITHMS = ["BFS", "UCS", "A*"]
+COMPARISON_ALGORITHMS = ["BFS", "DFS", "DLS", "IDS", "Bidirectional BFS",
+                         "UCS", "Greedy Best-First", "A*", "RBFS"]
+
+
+def compare_algorithms(source, destination, campus_graph=None, include_all=True):
     """
     Function: compare_algorithms
-    Purpose : Run BFS, UCS and A* on the same query so they can be compared
-              side by side (path, hops, cost, nodes expanded).
-    Returns : list of result dicts
+    Purpose : Comparison / demo mode - run the algorithms on the same
+              query so they can be compared on path, cost, steps, nodes
+              expanded and execution time. include_all=False runs only
+              the three operational algorithms (BFS, UCS, A*).
+    Returns : list of result dicts (an algorithm that finds no route,
+              e.g. DLS cut off by its limit, has found=False)
     """
     campus_graph = campus_graph or get_campus_graph()
-    return [campus_graph.breadth_first_search(source, destination),
-            campus_graph.uniform_cost_search(source, destination),
-            campus_graph.a_star_search(source, destination)]
+    searches = {
+        "BFS": campus_graph.breadth_first_search,
+        "DFS": campus_graph.depth_first_search,
+        "DLS": campus_graph.depth_limited_search,
+        "IDS": campus_graph.iterative_deepening_search,
+        "Bidirectional BFS": campus_graph.bidirectional_bfs,
+        "UCS": campus_graph.uniform_cost_search,
+        "Greedy Best-First": campus_graph.greedy_best_first_search,
+        "A*": campus_graph.a_star_search,
+        "RBFS": campus_graph.recursive_best_first_search,
+    }
+    results = []
+    for algorithm_name in (COMPARISON_ALGORITHMS if include_all else OPERATIONAL_ALGORITHMS):
+        started = time.perf_counter()
+        result = searches[algorithm_name](source, destination)
+        result["execution_time_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        result["operational"] = algorithm_name in OPERATIONAL_ALGORITHMS
+        results.append(result)
+    return results

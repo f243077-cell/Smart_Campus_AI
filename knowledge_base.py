@@ -17,7 +17,6 @@ pipeline stops here and the rejection is explained.
 
 import itertools
 
-import config
 
 
 class KnowledgeBaseError(Exception):
@@ -353,27 +352,27 @@ class KnowledgeBase:
     # ---------------------------------------------------------------
     # Convenience gatekeeper checks used by the router
     # ---------------------------------------------------------------
-    def is_registered(self, user_id):
+    def is_registered(self, name):
         """
         Function: is_registered
         Purpose : True if the KB knows the user under any role.
         """
-        return self.ask(("HasRole", user_id, "?r"))["entailed"]
+        return self.ask(("HasRole", name, "?r"))["entailed"]
 
-    def check_role(self, user_id, role):
+    def check_role(self, name, role):
         """
         Function: check_role
         Purpose : Verify that the role claimed in the request is supported
                   by the KB (prevents a student pretending to be staff).
         """
-        result = self.ask(("HasRole", user_id, role))
+        result = self.ask(("HasRole", name, role))
         if not result["entailed"]:
-            known_roles = [a["?r"] for a in self.ask(("HasRole", user_id, "?r"))["answers"]]
+            known_roles = [a["?r"] for a in self.ask(("HasRole", name, "?r"))["answers"]]
             if known_roles:
-                result["missing"] = [f"{user_id} is registered as {', '.join(known_roles)}, "
+                result["missing"] = [f"{name} is registered as {', '.join(known_roles)}, "
                                      f"not as {role}"]
             else:
-                result["missing"] = [f"{user_id} is not a registered campus user"]
+                result["missing"] = [f"{name} is not a registered campus user"]
         return result
 
 
@@ -381,8 +380,9 @@ def build_campus_knowledge_base():
     """
     Function: build_campus_knowledge_base
     Purpose : Create the campus KB with the facts and rules from the FOL
-              diagram of the project (R1-R4) plus campus authorization
-              rules used by the booking, urgent and full-service flows.
+              diagram of the project (R1-R4) plus the campus authorization
+              rules used by the booking, urgent and full-service flows
+              (which categories a member may request, group requests).
     Returns : KnowledgeBase
     """
     knowledge_base = KnowledgeBase()
@@ -413,6 +413,11 @@ def build_campus_knowledge_base():
         ("Course", "MachineLearning"), ("Course", "Databases"),
         ("Course", "ProgrammingFundamentals"),
         ("Completed", "Ahmed", "AI"),
+        # Exam / viva groups G1-G6 (same groups as the CSP diagram)
+        ("Group", "G1"), ("Group", "G2"), ("Group", "G3"),
+        ("Group", "G4"), ("Group", "G5"), ("Group", "G6"),
+        ("InGroup", "Ali", "G1"), ("InGroup", "Sara", "G2"),
+        ("InGroup", "Fatima", "G3"), ("InGroup", "Ahmed", "G4"),
     ]
     for fact in diagram_facts + campus_facts:
         knowledge_base.add_fact(fact)
@@ -436,40 +441,28 @@ def build_campus_knowledge_base():
         Rule("R6", [("Student", "?x")], ("HasRole", "?x", "Student"), "Student role"),
         Rule("R7", [("Instructor", "?x", "?c")], ("HasRole", "?x", "Instructor"), "Instructor role"),
         Rule("R8", [("Staff", "?x")], ("HasRole", "?x", "Staff"), "Staff role"),
-        # Booking authorization
-        Rule("R9", [("HasRole", "?x", "Student")], ("CanBook", "?x", "StudyRoom"),
-             "Students can book study rooms"),
-        Rule("R10", [("HasRole", "?x", "Instructor")], ("CanBook", "?x", "StudyRoom"),
-             "Instructors can book study rooms"),
-        Rule("R11", [("HasRole", "?x", "Instructor")], ("CanBook", "?x", "SeminarRoom"),
-             "Instructors can book seminar rooms"),
-        Rule("R12", [("HasRole", "?x", "Instructor")], ("CanBook", "?x", "ExamHall"),
-             "Instructors can book exam halls"),
-        Rule("R13", [("UseLab", "?x", "Lab1")], ("CanBook", "?x", "ComputerLab"),
-             "Anyone allowed to use Lab1 can book a computer lab"),
-        Rule("R14", [("HasRole", "?x", "Staff")], ("CanBook", "?x", "MeetingRoom"),
-             "Staff can book meeting rooms"),
-        Rule("R15", [("HasRole", "?x", "Instructor")], ("CanBook", "?x", "MeetingRoom"),
-             "Instructors can book meeting rooms"),
-        # Urgent services: any registered campus member may request them
-        Rule("R16", [("HasRole", "?x", "?r")], ("CanRequest", "?x", "UrgentService"),
-             "Every registered campus member can request urgent services"),
+        # Which service categories each campus member may request
+        Rule("R9", [("UseLab", "?x", "Lab1")], ("CanRequest", "?x", "AI_Lab_Support"),
+             "Anyone allowed to use Lab1 may request AI lab support"),
+        Rule("R10", [("HasRole", "?x", "Student")], ("CanRequest", "?x", "Viva_Scheduling"),
+             "Students may request a viva slot"),
+        Rule("R11", [("HasRole", "?x", "Instructor")], ("CanRequest", "?x", "Viva_Scheduling"),
+             "Instructors may schedule vivas"),
+        Rule("R12", [("HasRole", "?x", "?r")], ("CanRequest", "?x", "Access_Request"),
+             "Every registered campus member may request room access"),
+        Rule("R13", [("HasRole", "?x", "?r")], ("CanRequest", "?x", "Maintenance"),
+             "Every registered campus member may report maintenance"),
+        Rule("R14", [("HasRole", "?x", "?r")], ("CanRequest", "?x", "Emergency_Help"),
+             "Every registered campus member may ask for emergency help"),
+        # Naming used in the student handout (UsesLab) for the diagram's UseLab
+        Rule("R15", [("UseLab", "?x", "?l")], ("UsesLab", "?x", "?l"),
+             "UsesLab is the same permission as UseLab"),
+        # Group-based requests (group_id)
+        Rule("R16", [("InGroup", "?x", "?g")], ("RepresentsGroup", "?x", "?g"),
+             "A group member may make requests for their group"),
+        Rule("R17", [("HasRole", "?x", "Instructor"), ("Group", "?g")], ("RepresentsGroup", "?x", "?g"),
+             "An instructor may make requests for any group"),
     ]
     for rule in rules:
         knowledge_base.add_rule(rule)
     return knowledge_base
-
-
-def resource_query_for_target(user_id, target):
-    """
-    Function: resource_query_for_target
-    Purpose : Turn an Eligibility_Check target into the matching FOL query.
-                course name        -> Eligible(user, course)
-                Lab1 / AI_Lab      -> UseLab(user, Lab1)
-                resource type name -> CanBook(user, type)
-    """
-    if target in ("Lab1", "AI_Lab"):
-        return ("UseLab", user_id, "Lab1")
-    if target in config.RESOURCE_TYPES:
-        return ("CanBook", user_id, target)
-    return ("Eligible", user_id, target)

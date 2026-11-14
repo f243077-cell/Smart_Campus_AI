@@ -4,9 +4,15 @@ ann_module.py
 Module 3.3 - ANN Priority Module
 Predicts the urgency / priority of a request.
 
-  * Perceptron : binary baseline   (1 = Urgent/High, 0 = Normal/Low)
-  * MLP        : final multiclass model 7 -> 4 -> 3 -> 4
-                 (Urgent, High, Normal, Low) with softmax output
+  * Perceptron : binary baseline / comparison model
+                 (1 = urgent, 0 = not_urgent)
+  * MLP        : final operational multiclass model 7 -> 4 -> 3 -> 4
+                 (urgent, high, normal, low) with softmax output
+
+Input = the raw feature vector in the fixed order of the handout,
+e.g. x = [0, 0, 8, 9, 5, 4, 1] for a student asking for AI lab support
+with severity 8, time sensitivity 9, crowd 5, distance 4, eligible.
+Both networks scale x to [0, 1] internally before using it.
 
 Both networks are written from scratch with numpy. The training data is
 a synthetic campus dataset generated and stored with pandas.
@@ -31,20 +37,26 @@ class ModelError(Exception):
 # -------------------------------------------------------------------
 # Synthetic dataset
 # -------------------------------------------------------------------
-REQUEST_TYPE_URGENCY = {
-    "Navigation_Only": 0.2, "Eligibility_Check": 0.1, "Booking_or_Scheduling": 0.3,
-    "Urgent_Service_Request": 1.0, "Full_Service_Request": 0.6,
+CATEGORY_URGENCY = {
+    "AI_Lab_Support": 0.5, "Viva_Scheduling": 0.3, "Access_Request": 0.2,
+    "Maintenance": 0.4, "Emergency_Help": 1.0,
 }
-ROLE_URGENCY = {"Student": 0.3, "Instructor": 0.6, "Staff": 0.5}
+ROLE_URGENCY = {"student": 0.3, "instructor": 0.6, "staff": 0.5}
+# Range of every raw feature x1..x7, used to scale x to [0, 1]
+FEATURE_MIN = np.array([0, 0, config.LEVEL_MIN, config.LEVEL_MIN, config.LEVEL_MIN, 0, 0], dtype=float)
+FEATURE_MAX = np.array([len(config.VALID_ROLES) - 1, len(config.CATEGORIES) - 1, config.LEVEL_MAX,
+                        config.LEVEL_MAX, config.LEVEL_MAX, config.MAX_ROUTE_DISTANCE, 1], dtype=float)
 PRIORITY_THRESHOLDS = (0.65, 0.50, 0.35)       # Urgent >= .65 > High >= .50 > Normal >= .35 > Low
 
 
-def scale_level(level_value):
+def scale_features(raw_features):
     """
-    Function: scale_level
-    Purpose : Map a 1..5 level (severity, time sensitivity, crowd) to [0, 1].
+    Function: scale_features
+    Purpose : Min-max scale raw feature vectors (one per row) to [0, 1] so
+              that no feature dominates just because of its unit.
     """
-    return (np.asarray(level_value, dtype=float) - config.LEVEL_MIN) / (config.LEVEL_MAX - config.LEVEL_MIN)
+    raw_features = np.asarray(raw_features, dtype=float)
+    return np.clip((raw_features - FEATURE_MIN) / (FEATURE_MAX - FEATURE_MIN), 0.0, 1.0)
 
 
 def generate_dataset(number_of_samples=1500, random_seed=config.RANDOM_SEED, save_path=None):
@@ -54,29 +66,30 @@ def generate_dataset(number_of_samples=1500, random_seed=config.RANDOM_SEED, sav
               The hidden urgency score is a weighted sum of the inputs
               (severity and time sensitivity matter most) plus Gaussian
               noise; thresholds turn it into four priority classes.
-    Returns : pandas DataFrame with raw columns, scaled features x1..x7,
+    Returns : pandas DataFrame with raw columns, raw feature vector x1..x7,
               'priority' (class name), 'priority_index' and 'is_urgent'
     """
     if number_of_samples < 50:
         raise ModelError("Use at least 50 samples to train the ANN.")
     generator = np.random.default_rng(random_seed)
     roles = generator.choice(config.VALID_ROLES, size=number_of_samples, p=[0.6, 0.25, 0.15])
-    request_types = generator.choice(config.REQUEST_TYPES, size=number_of_samples)
-    severity = generator.integers(1, 6, size=number_of_samples)
-    time_sensitivity = generator.integers(1, 6, size=number_of_samples)
-    crowd_level = generator.integers(1, 6, size=number_of_samples)
+    categories = generator.choice(config.CATEGORIES, size=number_of_samples)
+    severity = generator.integers(config.LEVEL_MIN, config.LEVEL_MAX + 1, size=number_of_samples)
+    time_sensitivity = generator.integers(config.LEVEL_MIN, config.LEVEL_MAX + 1, size=number_of_samples)
+    crowd_level = generator.integers(config.LEVEL_MIN, config.LEVEL_MAX + 1, size=number_of_samples)
     distance = np.round(generator.uniform(0, config.MAX_ROUTE_DISTANCE, size=number_of_samples), 1)
     eligibility = generator.integers(0, 2, size=number_of_samples)
 
     data_frame = pd.DataFrame({
-        "role": roles, "request_type": request_types, "severity": severity,
+        "role": roles, "category": categories, "severity": severity,
         "time_sensitivity": time_sensitivity, "crowd_level": crowd_level,
         "distance": distance, "eligibility": eligibility,
     })
-    features = encode_dataframe(data_frame)
+    raw_features = encode_dataframe(data_frame)
+    features = scale_features(raw_features)
     urgency_score = (0.35 * features[:, 2] + 0.25 * features[:, 3] + 0.10 * features[:, 4]
                      + 0.10 * features[:, 5]
-                     + 0.08 * data_frame["request_type"].map(REQUEST_TYPE_URGENCY).to_numpy()
+                     + 0.08 * data_frame["category"].map(CATEGORY_URGENCY).to_numpy()
                      + 0.07 * data_frame["role"].map(ROLE_URGENCY).to_numpy()
                      + 0.05 * features[:, 6]
                      + generator.normal(0, 0.03, size=number_of_samples))
@@ -85,7 +98,7 @@ def generate_dataset(number_of_samples=1500, random_seed=config.RANDOM_SEED, sav
          urgency_score >= PRIORITY_THRESHOLDS[2]], [0, 1, 2], default=3)
 
     for column_index, feature_name in enumerate(config.ANN_FEATURE_NAMES):
-        data_frame[f"x{column_index + 1}_{feature_name}"] = np.round(features[:, column_index], 4)
+        data_frame[f"x{column_index + 1}_{feature_name}"] = np.round(raw_features[:, column_index], 2)
     data_frame["urgency_score"] = np.round(urgency_score, 4)
     data_frame["priority_index"] = priority_index
     data_frame["priority"] = [config.PRIORITY_CLASSES[i] for i in priority_index]
@@ -100,20 +113,21 @@ def generate_dataset(number_of_samples=1500, random_seed=config.RANDOM_SEED, sav
 def encode_dataframe(data_frame):
     """
     Function: encode_dataframe
-    Purpose : Convert raw request columns into the scaled feature matrix
-              in the fixed order x1 Role ... x7 Eligibility (all in [0,1]).
+    Purpose : Convert request columns into the raw numeric feature matrix
+              in the fixed order x1 Role ... x7 Eligibility, using the
+              handout encodings (student = 0, AI_Lab_Support = 0, ...).
     """
     role_codes = data_frame["role"].map(config.ROLE_ENCODING)
-    type_codes = data_frame["request_type"].map(config.REQUEST_TYPE_ENCODING)
-    if role_codes.isna().any() or type_codes.isna().any():
-        raise ModelError("Dataset contains an unknown role or request type.")
+    category_codes = data_frame["category"].map(config.REQUEST_TYPE_ENCODING)
+    if role_codes.isna().any() or category_codes.isna().any():
+        raise ModelError("Dataset contains an unknown role or category.")
     return np.column_stack([
-        role_codes.to_numpy(dtype=float) / (len(config.VALID_ROLES) - 1),
-        type_codes.to_numpy(dtype=float) / (len(config.REQUEST_TYPES) - 1),
-        scale_level(data_frame["severity"]),
-        scale_level(data_frame["time_sensitivity"]),
-        scale_level(data_frame["crowd_level"]),
-        np.clip(data_frame["distance"].to_numpy(dtype=float) / config.MAX_ROUTE_DISTANCE, 0, 1),
+        role_codes.to_numpy(dtype=float),
+        category_codes.to_numpy(dtype=float),
+        data_frame["severity"].to_numpy(dtype=float),
+        data_frame["time_sensitivity"].to_numpy(dtype=float),
+        data_frame["crowd_level"].to_numpy(dtype=float),
+        data_frame["distance"].to_numpy(dtype=float),
         data_frame["eligibility"].to_numpy(dtype=float),
     ])
 
@@ -398,7 +412,8 @@ class PriorityPredictor:
         """
         config.ensure_directories()
         data_frame = generate_dataset(number_of_samples, save_path=config.ANN_DATASET_PATH)
-        features = data_frame[[f"x{i + 1}_{n}" for i, n in enumerate(config.ANN_FEATURE_NAMES)]].to_numpy()
+        features = scale_features(data_frame[[f"x{i + 1}_{n}" for i, n in enumerate(config.ANN_FEATURE_NAMES)]]
+                                  .to_numpy())
         multiclass_labels = data_frame["priority_index"].to_numpy()
         binary_labels = data_frame["is_urgent"].to_numpy()
 
@@ -449,23 +464,30 @@ class PriorityPredictor:
     def predict(self, feature_vector):
         """
         Function: predict
-        Purpose : Predict the priority of one request feature vector.
-        Returns : dict with MLP label, class probabilities and the
-                  perceptron's binary urgency flag
+        Purpose : Predict the priority of one raw request feature vector
+                  x = [Role, RequestType, Severity, TimeSensitivity,
+                       CrowdLevel, Distance, Eligibility].
+        Returns : standard priority output {binary_priority (Perceptron),
+                  final_priority (MLP), confidence} plus the class
+                  probabilities and the feature vector for explanations
         """
         if not (self.mlp.trained and self.perceptron.trained):
             raise ModelError("ANN models are not trained. Train them first (menu option 4).")
-        feature_vector = np.asarray(feature_vector, dtype=float).reshape(1, -1)
-        if feature_vector.shape[1] != len(config.ANN_FEATURE_NAMES):
+        raw_vector = np.asarray(feature_vector, dtype=float).reshape(1, -1)
+        if raw_vector.shape[1] != len(config.ANN_FEATURE_NAMES):
             raise ModelError(f"Expected {len(config.ANN_FEATURE_NAMES)} features, "
-                             f"got {feature_vector.shape[1]}.")
-        probabilities = self.mlp.predict_proba(feature_vector)[0]
+                             f"got {raw_vector.shape[1]}.")
+        scaled_vector = scale_features(raw_vector)
+        probabilities = self.mlp.predict_proba(scaled_vector)[0]
         predicted_index = int(np.argmax(probabilities))
+        perceptron_urgent = bool(self.perceptron.predict(scaled_vector)[0])
         return {
-            "priority": config.PRIORITY_CLASSES[predicted_index],
-            "confidence": float(probabilities[predicted_index]),
+            **config.PRIORITY_OUTPUT_TEMPLATE,
+            "binary_priority": config.BINARY_CLASSES[int(perceptron_urgent)],
+            "final_priority": config.PRIORITY_CLASSES[predicted_index],
+            "confidence": round(float(probabilities[predicted_index]), 2),
             "probabilities": {name: round(float(p), 3)
                               for name, p in zip(config.PRIORITY_CLASSES, probabilities)},
-            "perceptron_urgent": bool(self.perceptron.predict(feature_vector)[0]),
-            "features": dict(zip(config.ANN_FEATURE_NAMES, np.round(feature_vector[0], 3).tolist())),
+            "features": dict(zip(config.ANN_FEATURE_NAMES, [float(value) for value in raw_vector[0]])),
+            "scaled_features": dict(zip(config.ANN_FEATURE_NAMES, np.round(scaled_vector[0], 3).tolist())),
         }

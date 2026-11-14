@@ -2,12 +2,16 @@
 preprocessing.py
 -----------------------------------------------------------------------
 Module 3.1 - Input & Preprocessing
-First stage of the platform. It:
-  1. checks that all required fields are present,
-  2. normalizes values (case, aliases, building names, numbers),
-  3. validates ranges and allowed options,
-  4. builds the standard request object, and
-  5. prepares the ANN feature vector when the request needs the ANN.
+First stage of the platform (handout 4 and 8). It:
+  1. validates fields (required fields present, legal values, slot in
+     1-4, levels in 1-10, known locations, valid request type),
+  2. normalizes values ("ai lab" -> "AI_Lab", "urgent" ->
+     "Urgent_Service_Request", "viva" -> "Viva_Scheduling"),
+  3. takes the request type chosen explicitly by the user,
+  4. builds ONE standard request object (universal template),
+  5. prepares module inputs: logic query, search source/destination,
+     ANN feature fields, CSP details and the needs_* flags,
+  6. which the router then uses to decide the pipeline.
 -----------------------------------------------------------------------
 """
 
@@ -16,6 +20,7 @@ import itertools
 import numpy as np
 
 import config
+from knowledge_base import KnowledgeBaseError, format_atom, parse_atom
 
 
 class RequestValidationError(Exception):
@@ -67,18 +72,18 @@ def normalize_choice(raw_value, allowed_values, field_name, aliases=None):
                                  f"Allowed values: {', '.join(allowed_values)}")
 
 
-def normalize_user_id(raw_value):
+def normalize_name(raw_value):
     """
-    Function: normalize_user_id
-    Purpose : User ids must be a single word of letters/digits; returned
-              with the first letter capitalized (ali -> Ali, drkhan -> DrKhan
-              keeps internal capitals when given).
+    Function: normalize_name
+    Purpose : The requester's name must be a single word of letters/digits
+              (it is used as a constant in the knowledge base); returned
+              with the first letter capitalized (ali -> Ali, DrKhan stays).
     """
     text = _clean_text(raw_value)
     if not text:
-        raise RequestValidationError("Field 'user_id' is empty.")
+        raise RequestValidationError("Field 'name' is empty.")
     if not text.replace("_", "").isalnum():
-        raise RequestValidationError(f"user_id '{text}' may contain only letters, digits or '_'.")
+        raise RequestValidationError(f"name '{text}' may contain only letters, digits or '_' (one word).")
     return text[0].upper() + text[1:]
 
 
@@ -100,14 +105,28 @@ def parse_integer(raw_value, field_name, minimum, maximum):
     return number
 
 
-def validate_request(raw_request, campus_locations, known_targets=None):
+def parse_boolean(raw_value, field_name):
+    """
+    Function: parse_boolean
+    Purpose : Read yes/no style input (true/false, yes/no, y/n, 1/0).
+    """
+    text = _clean_text(raw_value).lower()
+    if text in ("true", "yes", "y", "1"):
+        return True
+    if text in ("false", "no", "n", "0"):
+        return False
+    raise RequestValidationError(f"Field '{field_name}' must be true or false, got '{raw_value}'.")
+
+
+def validate_request(raw_request, campus_locations):
     """
     Function: validate_request
-    Purpose : Validate and normalize a raw request dictionary and return
-              the standard request object used by every other module.
-    Inputs  : raw_request      - dict from CLI input or a CSV row
+    Purpose : Steps 1-4 of preprocessing (handout 8.1): read the fields,
+              validate them, normalize them to the project naming and build
+              ONE standard request object with every field of the
+              universal template (unused fields keep their empty value).
+    Inputs  : raw_request      - dict from the CLI form, the web form or a CSV row
               campus_locations - list of valid building names (graph nodes)
-              known_targets    - valid Eligibility_Check targets (optional)
     Returns : dict (standard request object)
     Raises  : RequestValidationError with a readable message
     """
@@ -126,83 +145,115 @@ def validate_request(raw_request, campus_locations, known_targets=None):
     if missing_specific:
         raise RequestValidationError(f"{request_type} requires field(s): {', '.join(missing_specific)}")
 
-    standard_request = {
-        "request_id": f"REQ-{next(_request_counter):04d}",
-        "user_id": normalize_user_id(request["user_id"]),
+    standard_request = dict(config.REQUEST_TEMPLATE)
+    standard_request.update({
+        "request_id": f"REQ{100 + next(_request_counter)}",
+        "name": normalize_name(request["name"]),
         "role": normalize_choice(request["role"], config.VALID_ROLES, "role"),
         "request_type": request_type,
-    }
+    })
+    allowed_fields = set(config.TYPE_REQUIRED_FIELDS[request_type] + config.TYPE_OPTIONAL_FIELDS[request_type])
 
-    if _clean_text(request.get("source")):
-        standard_request["source"] = normalize_choice(request["source"], campus_locations, "source location")
-    if _clean_text(request.get("destination")):
-        standard_request["destination"] = normalize_choice(request["destination"], campus_locations,
-                                                           "destination location")
+    def given(field_name):
+        """
+        Function: given
+        Purpose : True when this request type uses the field and it has a value.
+        """
+        return field_name in allowed_fields and bool(_clean_text(request.get(field_name)))
 
-    route_text = _clean_text(request.get("route_preference"))
-    standard_request["route_preference"] = (
-        normalize_choice(route_text, config.ROUTE_PREFERENCES, "route_preference")
-        if route_text else config.DEFAULT_ROUTE_PREFERENCE)
-
-    if request_type == "Navigation_Only" and standard_request["source"] == standard_request["destination"]:
-        raise RequestValidationError("Source and destination are the same location.")
-
-    if request_type == "Eligibility_Check":
-        target_text = _clean_text(request["target"])
-        allowed_targets = list(known_targets) if known_targets else [target_text]
-        standard_request["target"] = normalize_choice(target_text, allowed_targets, "eligibility target")
-
-    if request_type in ("Booking_or_Scheduling", "Full_Service_Request"):
-        standard_request["resource_type"] = normalize_choice(request["resource_type"],
-                                                             config.RESOURCE_TYPES, "resource_type")
-        standard_request["group_size"] = parse_integer(request["group_size"], "group_size", 1, 500)
-        preferred_text = _clean_text(request.get("preferred_slot"))
-        standard_request["preferred_slot"] = (
-            normalize_choice(preferred_text, config.TIME_SLOTS, "preferred_slot") if preferred_text else None)
-        sessions_text = _clean_text(request.get("sessions"))
-        standard_request["sessions"] = (parse_integer(sessions_text, "sessions", 1, len(config.TIME_SLOTS))
-                                        if sessions_text else 1)
-
-    if request_type == "Urgent_Service_Request":
-        standard_request["service_type"] = normalize_choice(request["service_type"],
-                                                            list(config.SERVICE_DESTINATIONS), "service_type")
-        if "destination" not in standard_request:
-            standard_request["destination"] = config.SERVICE_DESTINATIONS[standard_request["service_type"]]
-
-    if request_type in ("Urgent_Service_Request", "Full_Service_Request"):
-        for level_field in ("severity", "time_sensitivity", "crowd_level"):
+    if given("category"):
+        standard_request["category"] = normalize_choice(request["category"], config.CATEGORIES, "category",
+                                                        config.CATEGORY_ALIASES)
+    for location_field in ("current_location", "destination"):
+        if given(location_field):
+            standard_request[location_field] = normalize_choice(request[location_field], campus_locations,
+                                                                location_field.replace("_", " "))
+    if request_type == "Navigation_Only" and standard_request["current_location"] == standard_request["destination"]:
+        raise RequestValidationError("current_location and destination are the same place.")
+    if given("preferred_slot"):
+        standard_request["preferred_slot"] = parse_integer(request["preferred_slot"], "preferred_slot",
+                                                           config.SLOT_NUMBERS[0], config.SLOT_NUMBERS[-1])
+    for level_field in ("severity", "time_sensitivity", "crowd_level"):
+        if given(level_field):
             standard_request[level_field] = parse_integer(request[level_field], level_field,
                                                           config.LEVEL_MIN, config.LEVEL_MAX)
+    if given("group_id"):
+        standard_request["group_id"] = normalize_choice(request["group_id"], config.GROUP_IDS, "group_id")
+    if given("query"):
+        try:
+            standard_request["query"] = format_atom(parse_atom(_clean_text(request["query"])))
+        except KnowledgeBaseError as error:
+            raise RequestValidationError(f"Invalid query: {error}") from None
+    if _clean_text(request.get("eligibility_claim")):
+        standard_request["eligibility_claim"] = parse_boolean(request["eligibility_claim"], "eligibility_claim")
+    if given("description_note"):
+        note = _clean_text(request["description_note"])
+        if len(note) > 300:
+            raise RequestValidationError("description_note may be at most 300 characters.")
+        standard_request["description_note"] = note
     return standard_request
+
+
+def prepare_module_inputs(standard_request):
+    """
+    Function: prepare_module_inputs
+    Purpose : Step 5 of preprocessing (handout 4.5 / 8.1): mark which
+              modules the request needs (needs_* flags) and prepare their
+              inputs - the logic query, the search source/destination,
+              the ANN fields and the CSP details.
+    Returns : dict with needs_ann, needs_logic, needs_csp, needs_search
+              and module_inputs
+    """
+    request_type = standard_request["request_type"]
+    template = config.PIPELINE_TEMPLATES[request_type]
+    modules = {module for module, _ in template}
+    route_guidance = bool(standard_request["current_location"])
+    needs_search = "Search" in modules and (request_type in ("Navigation_Only", "Full_Service_Request")
+                                            or route_guidance)
+    module_inputs = {}
+    if "Logic_KB" in modules:
+        module_inputs["logic_query"] = (standard_request["query"] if request_type == "Eligibility_Check"
+                                        else f"CanRequest({standard_request['name']}, {standard_request['category']})")
+    if needs_search:
+        module_inputs["search"] = {"source": standard_request["current_location"],
+                                   "destination": standard_request["destination"] or "assigned by CSP"}
+    if "ANN" in modules:
+        module_inputs["ann_fields"] = {field: standard_request[field] for field in
+                                       ("role", "category", "severity", "time_sensitivity", "crowd_level")}
+    if "CSP" in modules:
+        module_inputs["csp"] = {"category": standard_request["category"],
+                                "preferred_slot": standard_request["preferred_slot"],
+                                "group_id": standard_request["group_id"]}
+    return {"needs_ann": "ANN" in modules, "needs_logic": "Logic_KB" in modules,
+            "needs_csp": "CSP" in modules, "needs_search": needs_search, "module_inputs": module_inputs}
 
 
 def build_feature_vector(standard_request, route_distance=0.0, eligibility_flag=0):
     """
     Function: build_feature_vector
-    Purpose : Prepare the ANN input vector in the fixed order of the
-              diagrams: x1 Role, x2 RequestType, x3 Severity,
-              x4 TimeSensitivity, x5 CrowdLevel, x6 Distance, x7 Eligibility.
-              Every value is min-max scaled to [0, 1].
+    Purpose : Prepare the ANN input in the fixed handout order
+              x = [Role, RequestType, Severity, TimeSensitivity,
+                   CrowdLevel, Distance, Eligibility]
+              with the handout encodings, e.g. [0, 0, 8, 9, 5, 4, 1].
+              RequestType is the service category (AI_Lab_Support = 0 ...).
     Inputs  : standard_request - validated request object
-              route_distance   - weighted route cost to the destination
-              eligibility_flag - 1 if the user is a registered campus user
-    Returns : numpy array of shape (7,)
+              route_distance   - weighted route cost to the service location
+              eligibility_flag - 1 if the requester is eligible / registered
+    Returns : list of 7 numbers
     """
-    def scaled_level(field_name):
+    def level(field_name):
         """
-        Function: scaled_level
-        Purpose : Scale a 1-5 level field to [0, 1]; missing fields count
-                  as the minimum level (requests without ANN inputs).
+        Function: level
+        Purpose : A 1-10 level field (missing counts as the minimum).
         """
-        value = standard_request.get(field_name, config.LEVEL_MIN)
-        return (value - config.LEVEL_MIN) / (config.LEVEL_MAX - config.LEVEL_MIN)
+        return float(standard_request.get(field_name) or config.LEVEL_MIN)
 
-    return np.array([
-        config.ROLE_ENCODING[standard_request["role"]] / (len(config.VALID_ROLES) - 1),
-        config.REQUEST_TYPE_ENCODING[standard_request["request_type"]] / (len(config.REQUEST_TYPES) - 1),
-        scaled_level("severity"),
-        scaled_level("time_sensitivity"),
-        scaled_level("crowd_level"),
-        min(max(float(route_distance), 0.0) / config.MAX_ROUTE_DISTANCE, 1.0),
+    return [
+        float(config.ROLE_ENCODING[standard_request["role"]]),
+        float(config.REQUEST_TYPE_ENCODING.get(standard_request["category"], 0)),
+        level("severity"),
+        level("time_sensitivity"),
+        level("crowd_level"),
+        round(max(float(route_distance), 0.0), 2),
         float(1 if eligibility_flag else 0),
-    ], dtype=float)
+    ]
