@@ -158,22 +158,24 @@ def plot_campus_graph(campus_graph, route_path=None, title="Campus Map", file_na
 def plot_algorithm_comparison(results, file_name="search_comparison.png"):
     """
     Function: plot_algorithm_comparison
-    Purpose : Grouped bar chart of path cost, stops and nodes expanded for
-              BFS, UCS and A* on the same query.
+    Purpose : Grouped bar chart of path cost, steps and nodes expanded for
+              every search algorithm on the same query (comparison mode).
+              An algorithm that found no route (DLS cut off by its depth
+              limit) shows no cost / steps bars.
     """
-    algorithms = [result["algorithm"] for result in results]
-    metrics = {"Path cost": [r["cost"] for r in results],
-               "Stops": [r["hops"] for r in results],
+    algorithms = [result["algorithm_used"] for result in results]
+    metrics = {"Path cost": [r["cost"] if r["found"] else 0 for r in results],
+               "Steps": [r["steps"] if r["found"] else 0 for r in results],
                "Nodes expanded": [r["nodes_expanded"] for r in results]}
     positions = np.arange(len(algorithms))
-    bar_width = 0.25
-    figure, axis = plt.subplots(figsize=(8, 4.5))
+    bar_width = 0.27
+    figure, axis = plt.subplots(figsize=(max(8, 1.25 * len(algorithms)), 4.8))
     for offset, (metric_name, values) in enumerate(metrics.items()):
         bars = axis.bar(positions + (offset - 1) * bar_width, values, bar_width, label=metric_name)
-        axis.bar_label(bars, fontsize=9)
-    axis.set_xticks(positions, algorithms)
-    path_text = f"{results[0]['path'][0]} -> {results[0]['path'][-1]}"
-    axis.set_title(f"BFS vs UCS vs A*  ({path_text})", fontweight="bold")
+        axis.bar_label(bars, fontsize=8)
+    axis.set_xticks(positions, [name.replace(" ", "\n", 1) for name in algorithms], fontsize=8.5)
+    path_text = f"{results[0]['path'][0]} -> {results[0]['path'][-1]}" if results[0]["path"] else ""
+    axis.set_title(f"Search algorithms compared  ({path_text})", fontweight="bold")
     axis.legend()
     axis.spines[["top", "right"]].set_visible(False)
     return _save_figure(figure, file_name)

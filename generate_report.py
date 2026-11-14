@@ -15,6 +15,7 @@ Run:  python generate_report.py
 
 import contextlib
 import io
+import textwrap
 import os
 import sys
 
@@ -37,6 +38,7 @@ REPORT_PDF_PATH = os.path.join(REPORT_DIRECTORY, "Smart_Campus_AI_Report.pdf")
 SOURCE_FILES = ["main.py", "app.py", "ui.py", "config.py", "preprocessing.py", "router.py", "ann_module.py",
                 "knowledge_base.py", "csp_scheduler.py", "search_navigation.py",
                 "response_layer.py", "visualizer.py", "generate_report.py"]
+SCREENSHOT_WIDTH = 120                  # wrap long console lines so screenshots stay readable
 MAX_LINES_PER_SCREENSHOT = 58
 
 
@@ -58,7 +60,11 @@ def text_to_screenshots(console_text, base_name, title):
     Purpose : Split long console output into chunks and render each chunk
               as a terminal-style PNG. Returns the list of image paths.
     """
-    lines = console_text.strip("\n").splitlines()
+    lines = []
+    for line in console_text.strip("\n").splitlines():
+        indent = " " * (len(line) - len(line.lstrip()) + 3)
+        lines.extend(textwrap.wrap(line, SCREENSHOT_WIDTH, subsequent_indent=indent, drop_whitespace=False,
+                                   replace_whitespace=False) or [""])
     paths = []
     for part, start in enumerate(range(0, max(len(lines), 1), MAX_LINES_PER_SCREENSHOT), start=1):
         chunk = "\n".join(lines[start:start + MAX_LINES_PER_SCREENSHOT])
@@ -101,20 +107,21 @@ def collect_evidence():
         request_lines = "\n".join(f"    {key}: {value}" for key, value in demo["request"].items())
         text = f">>> Demo {number}: {demo['title']}\n  Raw request:\n{request_lines}\n\n" + format_response(response)
         images = text_to_screenshots(text, f"02_demo_{number:02d}", f"Menu 2 - Demo {number}")
-        if response["route"]:
-            images.append(visualizer.plot_campus_graph(system.campus_graph, response["details"]["search"]["path"],
-                                                       f"{demo['title']}: {response['route']}",
+        if response["route"] and len(response["route"]["path"]) > 1:
+            images.append(visualizer.plot_campus_graph(system.campus_graph, response["route"]["path"],
+                                                       f"Demo {number}: {' -> '.join(response['route']['path'])}",
                                                        f"demo_{number:02d}_route.png"))
         sections.append({"title": f"Task: {demo['title']}",
-                         "description": f"Status {response['status']}; modules run: "
-                                        f"{', '.join(response['modules_run'])}.",
+                         "description": f"Decision {response['decision']}"
+                                        + (f" at {response['rejected_at']}" if response.get("rejected_at") else "")
+                                        + f"; pipeline {' -> '.join(response['selected_pipeline']) or '(none)'}.",
                          "images": images})
 
     # Batch CSV
     _, batch_text = capture_output(main.process_batch_csv, system)
     sections.append({"title": "Task: Batch processing from CSV (menu 3)",
                      "description": "All rows of data/campus_requests.csv processed with pandas, including "
-                                    "invalid rows (non-numeric group size, missing user id).",
+                                    "invalid rows (unknown location, slot 7, missing name).",
                      "images": text_to_screenshots(batch_text, "03_batch", "Menu 3 - Batch CSV")})
 
     # Knowledge base
@@ -124,7 +131,8 @@ def collect_evidence():
     kb_lines += ["", f"  --- Forward chaining: {len(derived)} derived facts (first 20) ---"]
     for fact, (rule_name, _) in sorted(derived.items())[:20]:
         kb_lines.append(f"   {format_atom(fact):40s} by {rule_name}")
-    for query_text in ("Eligible(x, AI)", "UseLab(DrKhan, Lab1)", "Eligible(Sara, AI)", "CanBook(Fatima, SeminarRoom)"):
+    for query_text in ("Eligible(x, AI)", "UsesLab(DrKhan, Lab1)", "Eligible(Sara, AI)",
+                       "CanRequest(Sara, AI_Lab_Support)", "RepresentsGroup(Ahmed, G4)"):
         result = knowledge_base.ask(parse_atom(query_text))
         kb_lines += ["", f"  Query: {query_text}  ->  entailed: {result['entailed']}"]
         kb_lines += [f"     answer: {answer}" for answer in result["answers"] if answer]
@@ -146,8 +154,9 @@ def collect_evidence():
                      f"{no_heuristic_graph.heuristic_available()}\n"
                      f"  find_route policy result: {system_fallback_route(no_heuristic_graph)}")
     sections.append({"title": "Task: Search & Navigation (menu 6)",
-                     "description": "BFS (unweighted), UCS (weighted fallback) and A* (weighted with admissible "
-                                    "heuristic) compared on the same queries.",
+                     "description": "Comparison mode: BFS, DFS, DLS, IDS and Bidirectional BFS (unweighted) and "
+                                    "UCS, Greedy Best-First, A* and RBFS (weighted) on the same queries. "
+                                    "Operational mode uses one algorithm chosen by the policy.",
                      "images": text_to_screenshots(navigation_text + fallback_text, "05_navigation",
                                                    "Menu 6 - Campus navigation") + navigation_images})
 
@@ -159,12 +168,12 @@ def collect_evidence():
                      "images": text_to_screenshots(csp_text, "06_csp", "Menu 7 - CSP schedule") + [schedule_plot]})
 
     # Invalid menu input / error handling, captured from a real run of main()
-    scripted_input = "9\nabc\n5\n3\nEligible Sara AI\n0\n1\n1\nAli\n1\nParking\nParking\n\nn\n"
+    scripted_input = "9\nabc\n5\n3\nEligible Sara AI\n0\n1\nAli\n1\n1\nParking\nParking\nn\n"
     _, error_text = capture_output(run_main_with_input, scripted_input)
     sections.append({"title": "Task: Exception handling",
                      "description": "Wrong menu options, a malformed KB query and an invalid request "
-                                    "(same source and destination) are reported without crashing; end of "
-                                    "input exits cleanly.",
+                                    "(same current location and destination) are reported without crashing; "
+                                    "end of input exits cleanly.",
                      "images": text_to_screenshots(error_text, "07_errors", "Error handling")})
     return sections, metrics
 
@@ -206,8 +215,9 @@ def system_fallback_route(graph_without_heuristic):
     Function: system_fallback_route
     Purpose : Show that find_route falls back to UCS when no heuristic exists.
     """
-    result = find_route("Main_Gate", "AI_Lab", "distance", graph_without_heuristic)
-    return f"{result['algorithm']} ({result['policy']}), path {' -> '.join(result['path'])}, cost {result['cost']}"
+    result = find_route("Main_Gate", "AI_Lab", "weighted", True, graph_without_heuristic)
+    return (f"{result['algorithm_used']} ({result['policy']}), path {' -> '.join(result['path'])}, "
+            f"cost {result['cost']}")
 
 
 # -------------------------------------------------------------------
@@ -295,13 +305,26 @@ def build_document(sections, metrics):
 
     document.add_heading("3. Architecture and Request Lifecycle", level=1)
     add_bullets(document, [
-        "1. User submits a structured request (CLI form, demo or CSV row).",
-        "2. Input & Preprocessing validates and standardizes it, and prepares the ANN feature vector.",
-        "3. Request Router selects the pipeline from request_type.",
-        "4. Relevant AI modules execute in order; Logic / KB can stop the pipeline.",
-        "5. Final Response is generated, shown to the user and logged to outputs/results_log.csv."])
-    add_table(document, ["Request type", "Pipeline (in order)"],
+        "1. User submits a structured request (CLI form asks name, role, request type, then the fields of that type).",
+        "2. Input & Preprocessing validates and normalizes it, builds the standard request object and prepares "
+        "the module inputs and the needs_ann / needs_logic / needs_csp / needs_search flags.",
+        "3. Request Router reads request_type and returns the control object {request_id, selected_pipeline, "
+        "needs_*}.",
+        "4. The selected modules run in order. Logic / KB answers 'Eligible / Allowed?': No -> Rejected / "
+        "Explain; Yes -> CSP. Search runs when route guidance is needed.",
+        "5. The Final Response Generator returns {request_id, decision, priority, eligibility, assignment, "
+        "route, message}, shown to the user and logged to outputs/results_log.csv."])
+    add_table(document, ["Request type", "Pipeline (in order; brackets = optional)"],
               [(name, " -> ".join(modules)) for name, modules in PIPELINES.items()])
+    add_table(document, ["Standard structure", "Fields"], [
+        ("Request object", ", ".join(config.REQUEST_TEMPLATE)),
+        ("Router output", ", ".join(config.ROUTER_OUTPUT_TEMPLATE)),
+        ("Priority output (ANN)", ", ".join(config.PRIORITY_OUTPUT_TEMPLATE)),
+        ("Logic output (KB)", ", ".join(config.LOGIC_OUTPUT_TEMPLATE)),
+        ("CSP output", ", ".join(config.CSP_OUTPUT_TEMPLATE)),
+        ("Search output", ", ".join(config.SEARCH_OUTPUT_TEMPLATE)),
+        ("Final response", ", ".join(config.FINAL_RESPONSE_TEMPLATE)),
+        ("ANN feature order", ", ".join(config.FEATURE_ORDER))])
     add_table(document, ["Responsibility", "Module", "File"], [
         ("User intent", "User input", "main.py"), ("Validation / features", "Input & Preprocessing", "preprocessing.py"),
         ("Control flow", "Request Router", "router.py"), ("Priority estimation", "ANN", "ann_module.py"),
@@ -310,67 +333,86 @@ def build_document(sections, metrics):
 
     document.add_heading("4. Modules Completed", level=1)
     add_table(document, ["Component", "Marks", "Status", "What was implemented"], [
-        ("Input & Preprocessing", 10, "Completed", "Required-field checks, alias & case normalization, range checks, "
-                                                    "custom exception, 7-feature ANN vector"),
+        ("Input & Preprocessing", 10, "Completed", "Standard request object, required-field and range checks "
+                                                    "(slot 1-4, levels 1-10), normalization, needs_* flags, "
+                                                    "module inputs, 7-feature ANN vector"),
         ("ANN Priority Prediction", 20, "Completed", f"Perceptron ({metrics['perceptron_accuracy']:.1%}) and MLP "
                                                       f"7-4-3-4 ({metrics['mlp_accuracy']:.1%}) from scratch in numpy"),
-        ("Logic / Knowledge Base", 20, "Completed", "FOL facts and rules R1-R16, unification, forward and backward "
-                                                     "chaining, proofs and failure explanations"),
+        ("Logic / Knowledge Base", 20, "Completed", "FOL facts and rules R1-R17, unification, forward and backward "
+                                                     "chaining, proofs and failure explanations, gatekeeper"),
         ("CSP Scheduler", 15, "Completed", "AC-3, backtracking, MRV, LCV, forward checking; G1-G6 exam timetable "
-                                            "and room booking"),
-        ("Search Navigation", 15, "Completed", "Campus graph from the diagram; BFS, UCS and A* with admissible heuristic"),
-        ("Final Response & Integration", 10, "Completed", "Router pipelines, combined explained response, CSV log"),
+                                            "and room / slot assignment per category"),
+        ("Search Navigation", 15, "Completed", "Campus graph from the diagram; operational BFS / A* / UCS policy; "
+                                                "DFS, DLS, IDS, Bidirectional BFS, Greedy, RBFS for comparison"),
+        ("Final Response & Integration", 10, "Completed", "Router control object, standard final response, "
+                                                           "rejection at every stage, CSV log"),
         ("Documentation & Code Quality", 10, "Completed", "Comment block on every function, clear names, "
                                                            "exception handling, this report")])
 
     document.add_heading("5. AI Concepts Used", level=1)
     concepts = [
         ("5.1 Input & Preprocessing",
-         "Every request must contain user_id, role and request_type plus the fields of its type. Text is "
-         "normalized so 'nav', 'Navigation' and 'navigation_only' all become Navigation_Only and 'ai lab' becomes "
-         "AI_Lab. Numbers are range checked (severity 1-5, group size 1-500). Errors raise RequestValidationError "
-         "so the system never crashes on bad data. For ANN requests the module builds the feature vector "
-         "x1 Role, x2 RequestType, x3 Severity, x4 TimeSensitivity, x5 CrowdLevel, x6 Distance, x7 Eligibility, "
-         "min-max scaled to [0, 1]."),
+         "The CLI is a structured form: it asks Name, Role and Request Type, then only the fields that request "
+         "type needs (category, current_location, destination, preferred_slot 1-4, severity / time_sensitivity / "
+         "crowd_level 1-10, group_id, query, description_note). Validation checks that required fields are present "
+         "and legal (slot in {1,2,3,4}, levels numeric and in range, locations are campus nodes, request_type is "
+         "supported). Normalization maps 'ai lab' to AI_Lab, 'urgent' to Urgent_Service_Request and 'viva' to "
+         "Viva_Scheduling. The module builds one standard request object (every field of the universal template) "
+         "and prepares the module inputs: the logic query, the search source and destination, the ANN fields and "
+         "the CSP details, plus the needs_* flags. Errors raise RequestValidationError, so bad data never crashes "
+         "the system and becomes a 'rejected' response."),
         ("5.2 Request Router",
-         "A table maps each request type to an ordered list of modules. The router runs them one by one, "
-         "collects outputs, and stops when Logic / KB rejects a request or CSP finds no assignment. Skipped "
-         "modules are reported in the explanation."),
+         "Implements the routing pseudocode of the handout: Navigation_Only -> Search; Eligibility_Check -> "
+         "Logic_KB; Booking_or_Scheduling -> Logic_KB -> CSP -> optional Search; Urgent_Service_Request -> ANN -> "
+         "Logic_KB -> CSP -> optional Search; Full_Service_Request -> ANN -> Logic_KB -> CSP -> Search. Search is "
+         "optional when no current_location is given (no route guidance needed). The router returns the control "
+         "object {request_id, selected_pipeline, needs_ann, needs_logic, needs_csp, needs_search}, dispatches the "
+         "request and stops the chain at the first failure."),
         ("5.3 ANN Priority Module",
-         "A synthetic dataset of 1500 requests is generated with numpy and stored with pandas. A hidden urgency "
-         "score (weighted mostly by severity and time sensitivity, plus noise) is cut into four classes. The "
-         "Perceptron uses a step activation and the perceptron learning rule as a binary baseline "
-         "(Urgent/High vs Normal/Low). The MLP has the exact shape of the project diagram: 7 inputs, hidden "
-         "layers of 4 and 3 tanh neurons and 4 softmax outputs (Urgent, High, Normal, Low). It is trained with "
-         "cross-entropy loss, hand-written backpropagation and mini-batch gradient descent with momentum. "
-         "The ANN predicts priority only: it never approves or rejects a request (see the unregistered user "
-         "'Zain' in the batch run, who receives Urgent priority but is still rejected by the KB)."),
+         "Input is the feature vector in the fixed order Role, RequestType, Severity, TimeSensitivity, CrowdLevel, "
+         "Distance, Eligibility with the handout encodings (student = 0, instructor = 1, staff = 2; AI_Lab_Support = "
+         "0 ... Emergency_Help = 4), e.g. x = [0, 0, 8, 9, 5, 4, 1]. Distance is the A* route cost to the nearest "
+         "building serving the category. A synthetic dataset of 1500 requests is generated with numpy and stored "
+         "with pandas. The Perceptron (step activation, perceptron learning rule) is the binary baseline: urgent vs "
+         "not_urgent. The MLP has the exact shape of the project diagram (7 inputs, hidden layers of 4 and 3 tanh "
+         "neurons, 4 softmax outputs: urgent, high, normal, low), trained with cross-entropy, hand-written "
+         "backpropagation and mini-batch gradient descent with momentum. Both scale x to [0, 1] internally. The "
+         "output is {binary_priority, final_priority, confidence}; the MLP priority is used for scheduling, the "
+         "Perceptron output for comparison. The ANN never approves or rejects a request."),
         ("5.4 Logic / Knowledge Base",
          "Knowledge is stored as First-Order Logic definite clauses. Facts and rules R1-R4 come from the FOL "
          "diagram (Teaches => Instructor, Enrolled in AI => UseLab, Student AND Completed(ProgrammingFundamentals) "
-         "=> Eligible(AI), Instructor of AI => UseLab). Extra rules define roles, prerequisites and booking "
-         "permissions. Unification with variable renaming (standardizing apart) supports forward chaining "
-         "(derive all entailed facts) and backward chaining (goal-directed proof with a proof trace). When a "
-         "query fails, the engine lists the missing premises, e.g. 'R3 needs Completed(Sara, "
-         "ProgrammingFundamentals)'. The KB is the gatekeeper before CSP: the claimed role is verified first, then "
-         "the specific permission."),
+         "=> Eligible(AI), Instructor of AI => UseLab). Further rules define roles, prerequisites, which service "
+         "categories each member may request (CanRequest), group requests (RepresentsGroup) and UsesLab, the "
+         "handout's name for UseLab. Unification with standardizing apart supports forward chaining and backward "
+         "chaining with a proof trace. Eligibility_Check requests answer their FOL query (entailed true/false with "
+         "an explanation). For service requests the module is the gatekeeper before CSP: it verifies the claimed "
+         "role, the category permission and the group, and returns {allowed, entailed, explanation}; if not "
+         "allowed the request stops with the missing premises as the reason."),
         ("5.5 CSP Scheduler",
-         "Variables receive (time slot, room) values. Unary constraints remove rooms of the wrong type or "
-         "capacity. Binary constraints from the CSP diagram: G1!=G2, G1!=G4, G2!=G4, G3!=G5, G3!=G6, G5!=G6, "
-         "G1!=G3 (examiner clash), G2!=G5 (supervisor clash) and G4 < G3 (precedence), plus no room "
-         "double-booking. AC-3 prunes values first, then backtracking search uses MRV with a degree tie-break, LCV "
-         "value ordering and forward checking. Booking requests are solved as a CSP against all existing bookings; "
-         "the ANN priority only changes value ordering (urgent requests prefer the earliest slot)."),
+         "Exam timetable: variables G1-G6 receive (time slot, room) values; binary constraints from the CSP "
+         "diagram (G1!=G2, G1!=G4, G2!=G4, G3!=G5, G3!=G6, G5!=G6, G1!=G3 examiner clash, G2!=G5 supervisor "
+         "clash, G4 < G3 precedence) plus no room double-booking. AC-3 prunes values first, then backtracking with "
+         "MRV, degree tie-break, LCV and forward checking. Service requests: the domain is every (slot, room) of "
+         "the rooms serving the category; constraints are capacity (group size of group_id), the room being free, "
+         "the requester's fixed commitments and the group's own exam slot. Values are ordered by the preferred "
+         "slot, then the next feasible later slot; an urgent MLP priority takes the earliest free slot. Output: "
+         "{decision, assigned_room, assigned_slot, destination, notes}."),
         ("5.6 Search & Navigation",
          "The campus map (13 buildings, 19 weighted edges, coordinates) is copied from the project diagrams. "
-         "BFS solves unweighted problems (fewest stops). A* solves weighted problems with f(n) = g(n) + h(n). "
-         "Plain Euclidean distance would overestimate some edges (Admin_Block-Student_Services costs 1 but is 3 "
-         f"units apart), so h(n) = {CampusGraph().heuristic_scale:.3f} x Euclidean distance, where the factor is "
-         "the minimum cost/length ratio over all edges. This keeps the heuristic admissible and consistent, so A* "
-         "stays optimal. UCS is the fallback for weighted graphs without a heuristic."),
+         "Operational mode runs ONE algorithm by the official policy: unweighted graph -> BFS, weighted graph with "
+         "a heuristic -> A*, weighted without a heuristic -> UCS. Comparison mode runs BFS, DFS, DLS, IDS and "
+         "Bidirectional BFS on the unweighted view and UCS, Greedy Best-First, A* and RBFS on the weighted view, "
+         "comparing cost, steps, nodes expanded and execution time. Plain Euclidean distance would overestimate "
+         "some edges (Admin_Block-Student_Services costs 1 but is 3 units apart), so h(n) = "
+         f"{CampusGraph().heuristic_scale:.3f} x Euclidean distance, the minimum cost/length ratio over all edges; "
+         "this keeps the heuristic admissible and consistent, so A* and RBFS stay optimal. Output: "
+         "{algorithm_used, path, cost, steps}."),
         ("5.7 Final Response Layer",
-         "Combines priority, authorization with proofs, assignment, route and a numbered explanation into one "
-         "answer with a final status (COMPLETED, APPROVED, DISPATCHED, REJECTED, UNSCHEDULABLE or INVALID)."),
+         "Combines the outputs of the executed modules only into {request_id, decision, priority, eligibility, "
+         "assignment, route, message}. decision is completed (route only), answered (eligibility query), accepted "
+         "(booking, urgent and full service) or rejected (at preprocessing, Logic / KB, CSP or Search, with the "
+         "reason). A numbered explanation lists every step."),
     ]
     for heading, body in concepts:
         document.add_heading(heading, level=2)
@@ -381,19 +423,22 @@ def build_document(sections, metrics):
         "1. Install Python 3.10+ and the libraries: pip install -r requirements.txt",
         "2. Open a terminal in the SmartCampusAI folder.",
         "3. Run: python main.py (the ANN is trained automatically on the first run).",
-        "4. Menu 2 runs one demo per request type; menu 1 lets you enter your own request.",
+        "4. Menu 1 is the structured request form; menu 2 runs one demo per request type plus rejections.",
         "5. Menus 3-7 show the batch CSV run, ANN training, knowledge base, navigation and CSP schedule.",
         "6. Web UI (optional): python -m streamlit run app.py opens the same 7 functions in the browser "
         "(sidebar pages). The CLI and the web UI share all AI modules.",
         "7. Plots are saved in outputs/plots and every response is logged in outputs/results_log.csv.",
         "8. Optional: python generate_report.py rebuilds this report."])
     add_table(document, ["Sample user", "Role in KB", "Useful for"], [
-        ("Ali", "Student, completed ProgrammingFundamentals, enrolled in AI", "Eligible for AI, can book ComputerLab"),
-        ("Sara", "Student, no completed courses", "Rejection cases"),
-        ("Ahmed / Fatima", "Students with completed courses", "Eligibility for DataStructures, MachineLearning"),
-        ("DrKhan / DrAyesha", "Instructors (AI / DataStructures)", "Seminar room and exam hall bookings"),
-        ("Bilal", "Staff", "Meeting room bookings"),
-        ("Any other name", "Not registered", "Role check fails")])
+        ("Ali", "student, enrolled in AI, group G1", "Eligible for AI, AI lab support, full-service demo"),
+        ("Sara", "student, no completed courses, group G2", "Rejection cases (not eligible, no AI lab)"),
+        ("Ahmed / Fatima", "students with completed courses, groups G4 / G3", "Viva for a group, eligibility"),
+        ("DrKhan / DrAyesha", "instructors (AI / DataStructures)", "UsesLab(DrKhan, Lab1), vivas for any group"),
+        ("Bilal", "staff", "Maintenance requests"),
+        ("Any other name", "not registered", "Role check fails")])
+    add_table(document, ["Category", "Rooms (building)"],
+              [(category, ", ".join(f"{room} ({config.ROOMS[room]['building']})" for room in rooms))
+               for category, rooms in config.CATEGORY_ROOMS.items()])
 
     document.add_heading("7. Results and Screenshots", level=1)
     for section in sections:
@@ -405,7 +450,8 @@ def build_document(sections, metrics):
 
     document.add_heading("8. Assumptions and Design Constraints", level=1)
     add_bullets(document, [
-        "Users provide structured input (CLI form fields or CSV columns).",
+        "Users provide structured input (CLI form fields, web form or CSV columns); the request type is chosen "
+        "explicitly.",
         "The campus map is predefined (taken from the project diagrams).",
         "Knowledge base rules are consistent definite clauses (no negation).",
         "The ANN only predicts priority; it never approves or rejects requests.",

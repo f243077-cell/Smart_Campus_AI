@@ -39,13 +39,13 @@ LINES = {
     "Urgent_Service_Request": {"label": "Urgent service", "var": "var(--l-urg)"},
     "Full_Service_Request": {"label": "Full service", "var": "var(--l-full)"},
 }
-STATION_NAMES = {"Preprocessing": "Input check", "Router": "Router", "ANN": "Priority (ANN)",
-                 "Logic": "Logic / KB", "CSP": "Scheduler (CSP)", "Search": "Search",
+STATION_NAMES = {"Preprocessing": "Preprocessing", "Router": "Router", "ANN": "Priority (ANN)",
+                 "Logic_KB": "Logic / KB", "CSP": "Scheduler (CSP)", "Search": "Search",
                  "Response": "Final response"}
-STATUS_TONES = {"COMPLETED": "ok", "APPROVED": "ok", "DISPATCHED": "ok", "REJECTED": "bad", "INVALID": "bad",
-                "ERROR": "bad", "UNSCHEDULABLE": "warn"}
+# Tone of each final decision (handout: completed, answered, accepted, rejected)
+STATUS_TONES = {"completed": "ok", "answered": "ok", "accepted": "ok", "rejected": "bad", "not entailed": "warn"}
 TONE_VARS = {"ok": "var(--ok)", "bad": "var(--bad)", "warn": "var(--warn)"}
-PRIORITY_CLASS = {"Urgent": "p-urgent", "High": "p-high", "Normal": "p-normal", "Low": "p-low"}
+PRIORITY_CLASS = {"urgent": "p-urgent", "high": "p-high", "normal": "p-normal", "low": "p-low"}
 FIXED_BOOKINGS = ("AI Lab class (DrKhan)", "Reading group", "Admin meeting")
 
 ICON_PLAY = '<svg viewBox="0 0 20 20" aria-hidden="true" style="fill:currentColor"><path d="M6 4l10 6-10 6z"/></svg>'
@@ -167,11 +167,11 @@ button[data-testid="stBaseButton-primary"]:hover,button[data-testid="stBaseButto
 .st-key-req_type label[data-testid="stRadioOption"]::after{content:'';display:block;width:100%;height:16px;background:radial-gradient(circle,var(--panel) 0 3px,var(--lc) 3.2px 6px,transparent 6.4px) 0 0/25% 16px repeat-x,linear-gradient(var(--lc),var(--lc)) 0 6px/100% 4px no-repeat;border-radius:2px}
 .st-key-req_type label[data-testid="stRadioOption"]:hover,.st-key-demo_pick label[data-testid="stRadioOption"]:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:var(--lc)}
 .st-key-req_type label[data-testid="stRadioOption"][data-selected="true"],.st-key-demo_pick label[data-testid="stRadioOption"][data-selected="true"]{border-color:var(--lc);box-shadow:0 0 0 3px color-mix(in srgb,var(--lc) 22%,transparent)}
-.st-key-req_type [role="radiogroup"] > div:nth-child(1) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(1) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(2) label{--lc:var(--l-nav)}
-.st-key-req_type [role="radiogroup"] > div:nth-child(2) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(3) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(4) label{--lc:var(--l-elig)}
-.st-key-req_type [role="radiogroup"] > div:nth-child(3) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(5) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(6) label{--lc:var(--l-book)}
-.st-key-req_type [role="radiogroup"] > div:nth-child(4) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(7) label{--lc:var(--l-urg)}
-.st-key-req_type [role="radiogroup"] > div:nth-child(5) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(8) label{--lc:var(--l-full)}
+.st-key-req_type [role="radiogroup"] > div:nth-child(1) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(1) label{--lc:var(--l-nav)}
+.st-key-req_type [role="radiogroup"] > div:nth-child(2) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(2) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(3) label{--lc:var(--l-elig)}
+.st-key-req_type [role="radiogroup"] > div:nth-child(3) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(4) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(5) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(8) label{--lc:var(--l-book)}
+.st-key-req_type [role="radiogroup"] > div:nth-child(4) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(6) label{--lc:var(--l-urg)}
+.st-key-req_type [role="radiogroup"] > div:nth-child(5) label,.st-key-demo_pick [role="radiogroup"] > div:nth-child(7) label{--lc:var(--l-full)}
 .st-key-demo_pick [role="radiogroup"] > div:nth-child(9) label{--lc:var(--ink-3)}
 .st-key-demo_pick label[data-testid="stRadioOption"]{padding:16px 16px 16px 22px;min-height:84px}
 .st-key-demo_pick label[data-testid="stRadioOption"]::before{content:'';position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--lc);transform:scaleY(.35);transform-origin:top;transition:transform .3s cubic-bezier(.2,.8,.2,1)}
@@ -523,10 +523,21 @@ def panel(inner_html, title=None, meta=None, css_class="", label=None):
     return f'<section class="panel {css_class}"{aria_label}>{head}{inner_html}</section>'
 
 
+def decision_label(response):
+    """
+    Function: decision_label
+    Purpose : Decision word shown to the user; an answered eligibility
+              query that is not entailed is marked as such.
+    """
+    if response["decision"] == "answered" and not response["eligibility"].get("entailed"):
+        return "not entailed"
+    return response["decision"]
+
+
 def status_pill(status):
     """
     Function: status_pill
-    Purpose : Status text with a station symbol (ok / rejected / warning).
+    Purpose : Decision text with a station symbol (ok / rejected / warning).
     """
     tone = STATUS_TONES.get(status, "warn")
     return f'<span class="pill tone-{tone}">{esc(status)}</span>'
@@ -678,7 +689,7 @@ def result_caption(response, stages):
     stations_run = sum(1 for _, state, _ in stages if state == "ok")
     if failed_stage:
         return f"Stopped at {STATION_NAMES.get(failed_stage[0], failed_stage[0])}: {failed_stage[1]}"
-    return f"Arrived at the final response after {stations_run + 1} stops: {response['status']}."
+    return f"Arrived at the final response after {stations_run + 1} stops: {response['message']}"
 
 
 def short_text(text, limit=60):
@@ -699,7 +710,8 @@ def result_line(response, stages):
               stops are dashed, a failure ends at a red buffer stop.
     """
     line = line_of(response["request_type"])
-    tone = STATUS_TONES.get(response["status"], "warn")
+    decision = decision_label(response)
+    tone = STATUS_TONES.get(decision, "warn")
     stations = list(stages) + [("Response", "ok", "answer combined and logged")]
     failed_index = next((index for index, (_, state, _) in enumerate(stations) if state == "error"), None)
     if failed_index is not None:
@@ -723,10 +735,11 @@ def result_line(response, stages):
     end_left = 100 * end_index / (station_count - 1)
     duration = max(end_index, 1) * seconds_per_stop
     sign = (f'<span class="status-sign tone-{tone}" style="animation-delay:{duration:.2f}s">'
-            f'<i aria-hidden="true"></i><span>{esc(response["status"])}</span></span>')
+            f'<i aria-hidden="true"></i><span>{esc(decision.upper())}</span></span>')
     head = (f'<div class="rhead"><div style="display:flex;flex-direction:column;gap:6px">'
             f'<h2>{esc(response["request_id"])}</h2><span class="rbadge"><i aria-hidden="true"></i>'
-            f'{esc(line["label"])} line · {esc(response["user_id"])} · {esc(response["role"])}</span></div>{sign}</div>')
+            f'{esc(line["label"])} line · {esc(response["name"])} · {esc(response["role"])}'
+            f'{" · " + esc(response["category"]) if response.get("category") else ""}</span></div>{sign}</div>')
     track = (f'<div class="trackbox"><div class="trackin" style="--dur:{duration:.2f}s">'
              f'<div class="track"></div><div class="travel" style="width:{end_left:.2f}%"></div>'
              f'{"".join(parts)}<div class="train" style="left:{end_left:.2f}%" aria-hidden="true">'
@@ -740,20 +753,30 @@ def result_line(response, stages):
 def key_results(response):
     """
     Function: key_results
-    Purpose : The four headline outputs of the Final Response Layer:
-              priority (ANN), permission (KB), assignment (CSP), route cost.
+    Purpose : The four parts of the standard final response: priority
+              (ANN), eligibility (KB), assignment (CSP) and route (Search).
     """
-    search = response["details"].get("search", {})
-    items = [("Priority (ANN)", response["priority"]),
-             ("Permission (KB)", response["authorization"]),
-             ("Assignment (CSP)", response["assignment"]),
-             ("Route cost", search.get("cost"))]
+    priority, eligibility = response["priority"], response["eligibility"]
+    assignment, route = response["assignment"], response["route"]
+    if "entailed" in eligibility:
+        eligibility_text, bad = ("Entailed" if eligibility["entailed"] else "Not entailed"), not eligibility["entailed"]
+    elif "allowed" in eligibility:
+        eligibility_text, bad = ("Allowed" if eligibility["allowed"] else "Not allowed"), not eligibility["allowed"]
+    else:
+        eligibility_text, bad = "", False
+    items = [("Priority (ANN)", priority.get("final_priority", ""),
+              f"Perceptron: {priority['binary_priority']} · confidence {priority['confidence']:.2f}" if priority else ""),
+             ("Eligibility (KB)", eligibility_text, ""),
+             ("Assignment (CSP)", f"{assignment['room']} · slot {assignment['slot']}" if assignment else "",
+              f"{assignment['time']} · {assignment['building'].replace('_', ' ')}" if assignment else ""),
+             ("Route (Search)", f"{route['algorithm']} · cost {route['cost']}" if route else "",
+              f"{route['steps']} steps" if route else "")]
     cells = []
-    for index, (label, value) in enumerate(items):
-        empty = value in (None, "", "-")
-        css_class = "none" if empty else ("bad" if value == "DENIED" else "")
+    for index, (label, value, note) in enumerate(items):
+        css_class = "none" if not value else ("bad" if label.startswith("Eligibility") and bad else "")
         cells.append(f'<div class="kv {css_class}" style="animation-delay:{0.1 + index * 0.08:.2f}s"><small>{esc(label)}</small>'
-                     f'<b>{"-" if empty else esc(value)}</b></div>')
+                     f'<b>{esc(value) if value else "-"}</b>'
+                     + (f'<small style="margin-top:2px">{esc(note)}</small>' if note else "") + "</div>")
     return f'<div class="keys">{"".join(cells)}</div>'
 
 
@@ -772,14 +795,15 @@ def probability_bars(probabilities):
     return "".join(rows)
 
 
-def feature_chips(features):
+def feature_chips(features, scaled_features):
     """
     Function: feature_chips
-    Purpose : The scaled ANN inputs x1..x7 with a small bar each.
+    Purpose : The ANN inputs x1..x7 (raw value as in the handout, bar =
+              value scaled to [0, 1] inside the network).
     """
     cells = "".join(f'<div class="feat" style="animation-delay:{index * 0.05:.2f}s">'
-                    f'<span class="muted">x{index + 1} {esc(name)}</span><b>{float(value):.2f}</b>'
-                    f'<span class="t"><i style="width:{100 * min(max(float(value), 0), 1):.0f}%"></i></span></div>'
+                    f'<span class="muted">x{index + 1} {esc(name)}</span><b>{number(float(value))}</b>'
+                    f'<span class="t"><i style="width:{100 * float(scaled_features[name]):.0f}%"></i></span></div>'
                     for index, (name, value) in enumerate(features.items()))
     return f'<div class="feats">{cells}</div>'
 
@@ -1052,36 +1076,46 @@ def confusion(matrix, labels):
 # -------------------------------------------------------------------
 # Navigation comparison
 # -------------------------------------------------------------------
-def algo_cards(results, best_name):
+def algo_cards(results, policy_name):
     """
     Function: algo_cards
-    Purpose : One card per search algorithm with cost, stops, nodes
-              expanded and the path found.
+    Purpose : One card per search algorithm with cost, steps, nodes
+              expanded and the path found. The algorithm the operational
+              policy uses is flagged; operational vs comparison-only is
+              shown on each card.
     """
     cards = []
     for index, result in enumerate(results):
-        is_best = result["algorithm"] == best_name
-        flag = '<span class="bestflag">Best route</span>' if is_best else ""
-        cards.append(f'<div class="algocard grow{" best" if is_best else ""}" '
-                     f'style="animation-delay:{index * 0.08:.2f}s;flex-basis:220px">'
+        is_policy = result["algorithm_used"] == policy_name
+        flag = ('<span class="bestflag">Used by policy</span>' if is_policy
+                else f'<span class="small muted">{"operational" if result.get("operational") else "comparison"}</span>')
+        path_text = (" → ".join(nice(node) for node in result["path"]) if result["found"]
+                     else "No route within the depth limit")
+        cards.append(f'<div class="algocard grow{" best" if is_policy else ""}" '
+                     f'style="animation-delay:{index * 0.05:.2f}s;flex-basis:260px">'
                      f'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
-                     f'<h3>{esc(result["algorithm"])}</h3>{flag}</div>'
-                     f'<div class="nums"><div><b>{esc(result["cost"])}</b><span>cost</span></div>'
-                     f'<div><b>{result["hops"]}</b><span>stops</span></div>'
+                     f'<h3>{esc(result["algorithm_used"])}</h3>{flag}</div>'
+                     f'<span class="small muted">{esc(result["graph_type"])} graph · {result["execution_time_ms"]:.2f} ms</span>'
+                     f'<div class="nums"><div><b>{esc(result["cost"]) if result["found"] else "-"}</b><span>cost</span></div>'
+                     f'<div><b>{result["steps"] if result["found"] else "-"}</b><span>steps</span></div>'
                      f'<div><b>{result["nodes_expanded"]}</b><span>expanded</span></div></div>'
-                     f'<p class="small muted">{" → ".join(nice(node) for node in result["path"])}</p></div>')
+                     f'<p class="small muted">{path_text}</p></div>')
     return '<div class="row">' + "".join(cards) + "</div>"
 
 
 def compare_bars(results, key, accent=False):
     """
     Function: compare_bars
-    Purpose : Bars comparing one measure (cost, stops, expanded) per algorithm.
+    Purpose : Bars comparing one measure (cost, steps, expanded) per
+              algorithm; '-' when the algorithm found no route.
     """
-    largest = max([result[key] for result in results] + [1])
-    return "".join(f'<div class="cmp"><span>{esc(result["algorithm"])}</span><span class="t"><i class="{"c" if accent else ""}" '
-                   f'style="width:{100 * result[key] / largest:.1f}%;animation-delay:{index * 0.08:.2f}s"></i></span>'
-                   f'<b style="text-align:right">{esc(result[key])}</b></div>' for index, result in enumerate(results))
+    values = [result[key] if result[key] is not None else 0 for result in results]
+    largest = max(values + [1])
+    return "".join(f'<div class="cmp" style="grid-template-columns:118px minmax(0,1fr) 34px">'
+                   f'<span>{esc(result["algorithm_used"])}</span><span class="t"><i class="{"c" if accent else ""}" '
+                   f'style="width:{100 * value / largest:.1f}%;animation-delay:{index * 0.05:.2f}s"></i></span>'
+                   f'<b style="text-align:right">{esc(result[key]) if result[key] is not None else "-"}</b></div>'
+                   for index, (result, value) in enumerate(zip(results, values)))
 
 
 # -------------------------------------------------------------------
